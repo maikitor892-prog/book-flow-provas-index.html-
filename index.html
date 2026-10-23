@@ -1,0 +1,690 @@
+<!doctype html>
+<!--
+  BookFlow — single-file frontend. Static hosting (Cloudflare Pages / Netlify), no build step.
+  Config: edit CFG in the script (public Supabase URL + publishable key only; never a service_role/secret key).
+  Backend contract (unchanged): tables bookings, orders (RLS, own rows); Edge Function create-checkout, body {quantity:1}, returns {url}.
+  Pricing, the 14-day trial and payment status are decided server-side. For the trial to be real, create-checkout must create the
+  Stripe Checkout Session with subscription_data.trial_period_days = 14 (mode "subscription"). The texts here only announce it.
+  i18n: all UI text lives in the D table (key -> [en, es, fr, de, it, pt]). Language and theme are saved in localStorage.
+  Testimonials are sample content: replace them with real customer quotes (with permission) before launch.
+  CSP: set it as a response header (_headers), not a meta tag. Needs: script-src for cdn.tailwindcss.com, cdn.jsdelivr.net and inline script;
+  style-src 'unsafe-inline'; connect-src for the Supabase URL; img-src data:. No new hosts were added. Test it before enforcing.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="BookFlow: appointments, clients and payments in one place. 14-day free trial.">
+<title>BookFlow — appointments, clients and payments in one place</title>
+<script>try{var s=localStorage.getItem('bf_theme');document.documentElement.dataset.theme=s||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}</script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+/* Midnight Slate (dark) and Clean Zinc (light) tokens */
+:root{color-scheme:dark;--bg:#1B2538;--bg2:#25324A;--surf:#2B3A55;--glass:rgba(43,58,85,.62);--hdr:rgba(27,37,56,.82);--em:#34D399;--emh:#6EE7B7;--onem:#052E22;--cy:#22D3EE;--tx:#F1F5F9;--mute:#A8B5C9;--bd:rgba(203,213,225,.17);--ok:#6EE7B7;--err:#FCA5A5;--warn:#FCD34D;--shc:rgba(7,12,24,.55);--shine:rgba(255,255,255,.16);--g1:rgba(52,211,153,.22);--g2:rgba(34,211,238,.16);--shadow:0 10px 30px rgba(7,12,24,.3)}
+[data-theme=light]{color-scheme:light;--bg:#F3F6FB;--bg2:#E7EDF6;--surf:#FFFFFF;--glass:rgba(255,255,255,.78);--hdr:rgba(243,246,251,.86);--em:#047857;--emh:#065F46;--onem:#FFFFFF;--cy:#0891B2;--tx:#0F172A;--mute:#4B5B72;--bd:rgba(15,23,42,.12);--ok:#047857;--err:#B91C1C;--warn:#B45309;--shc:rgba(30,58,100,.3);--shine:rgba(255,255,255,.75);--g1:rgba(16,185,129,.16);--g2:rgba(6,182,212,.14);--shadow:0 10px 30px rgba(30,58,100,.12)}
+[hidden]{display:none!important}
+html{scroll-behavior:smooth;scroll-padding-top:5rem}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.55;overflow-x:hidden;-webkit-font-smoothing:antialiased;
+ background-image:radial-gradient(60rem 32rem at 85% -8%,var(--g1),transparent),radial-gradient(44rem 28rem at -8% 18%,var(--g2),transparent)}
+h1,h2,h3{letter-spacing:-.015em}
+.glass{background:var(--glass);border:1px solid var(--bd);border-radius:1rem;backdrop-filter:blur(10px);box-shadow:var(--shadow)}
+.g2{background:var(--surf);border:1px solid var(--bd);border-radius:.9rem;box-shadow:0 14px 30px -10px var(--shc)}
+.hdr{background:var(--hdr);backdrop-filter:blur(10px);border-color:var(--bd)}
+.mute{color:var(--mute)}.lnk:hover{color:var(--tx)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:.65rem;padding:.6rem 1.1rem;font-weight:600;font-size:.9rem;min-height:2.75rem;border:1px solid transparent;cursor:pointer;transition:background .15s,opacity .15s;text-align:center}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn-p{background:var(--em);color:var(--onem)}.btn-p:hover:not(:disabled){background:var(--emh)}
+.btn-g{border-color:var(--bd);background:rgba(148,163,184,.1);color:var(--tx)}.btn-g:hover:not(:disabled){background:rgba(148,163,184,.2)}
+:focus-visible{outline:2px solid var(--em);outline-offset:2px}
+.fld{width:100%;min-height:2.75rem;background:var(--bg2);border:1px solid var(--bd);border-radius:.6rem;padding:.55rem .75rem;color:var(--tx);font-size:.95rem}
+.fld option{background:var(--surf);color:var(--tx)}
+.fld:focus{outline:2px solid var(--em);border-color:var(--em)}
+.lang-sel{width:auto;min-width:6.5rem;padding:.4rem .5rem;font-weight:600;cursor:pointer}
+label{font-size:.85rem;font-weight:500}
+.err{color:var(--err);font-size:.85rem}
+.spin{width:1rem;height:1rem;border:2px solid currentColor;border-right-color:transparent;border-radius:9999px;animation:sp .7s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+.sk{background:linear-gradient(90deg,var(--bg2),var(--surf),var(--bg2));background-size:200% 100%;animation:sh 1.4s linear infinite;border-radius:.75rem;height:5rem}
+@keyframes sh{to{background-position:-200% 0}}
+dialog{background:var(--surf);color:var(--tx);border:1px solid var(--bd);border-radius:1rem;padding:0;width:min(26rem,calc(100vw - 2rem))}
+dialog::backdrop{background:rgba(10,16,30,.6)}
+.badge{border-radius:9999px;padding:.1rem .6rem;font-size:.75rem;font-weight:600;border:1px solid currentColor;white-space:nowrap}
+.ok{color:var(--ok)}.wn{color:var(--warn)}.no{color:var(--err)}
+.moon{display:none}[data-theme=light] .moon{display:block}[data-theme=light] .sun{display:none}
+.rw{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.25rem .75rem;border-radius:.6rem;padding:.7rem .75rem;background:var(--bg2);font-size:.875rem}
+.tile{border-radius:.6rem;padding:.75rem;background:var(--bg2);text-align:center}
+.ic{display:inline-grid;place-items:center;width:2.75rem;height:2.75rem;border-radius:.65rem;margin-bottom:.75rem;background:var(--g1)}
+.ic svg{stroke:var(--em)}
+.chip{display:inline-flex;align-items:center;gap:.5rem;border:1px solid var(--bd);border-radius:9999px;padding:.4rem .9rem;font-size:.85rem;background:var(--glass)}
+.pill{display:inline-block;border-radius:9999px;padding:.25rem .85rem;font-size:.8rem;font-weight:700;background:var(--g1);color:var(--ok);border:1px solid var(--em)}
+/* FAQ */
+.faq summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:1rem;align-items:center;padding:1rem 1.25rem;min-height:3.25rem;font-weight:600}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";font-size:1.4rem;line-height:1;color:var(--em);flex:none;transition:transform .2s}
+.faq[open] summary::after{transform:rotate(45deg)}
+.faq p{padding:0 1.25rem 1.1rem;color:var(--mute);max-width:65ch}
+.faq[open] p{animation:fd .25s ease}
+@keyframes fd{from{opacity:0;transform:translateY(-4px)}}
+/* 3D stage: layers use --d for depth; JS feeds --rx --ry --px --py --lx --ly --sx --sy */
+.stage{perspective:1200px;perspective-origin:50% 40%;padding:1.75rem 1rem}
+.tilt{transform-style:preserve-3d;transform:rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));position:relative;will-change:transform}
+.lyr{transform:translate3d(calc(var(--px,0)*var(--d,0)*.18px),calc(var(--py,0)*var(--d,0)*.18px),calc(var(--d,0)*1px))}
+.card3d{position:relative;box-shadow:calc(var(--sx,0)*1px) calc(var(--sy,0)*1px + 26px) 60px -14px var(--shc),inset 0 1px 0 var(--shine)}
+.card3d::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(420px circle at var(--lx,30%) var(--ly,0%),var(--shine),transparent 62%)}
+.plate{position:absolute;inset:1.25rem -.75rem -1.25rem .75rem;border-radius:1.25rem;border:1px solid var(--bd);background:linear-gradient(135deg,var(--g1),var(--g2))}
+.floor{position:absolute;left:10%;right:10%;bottom:-2.75rem;height:2rem;border-radius:50%;background:radial-gradient(closest-side,var(--shc),transparent);filter:blur(10px);transform:translate3d(calc(var(--px,0)*-22px),0,-90px)}
+.orb{position:absolute;width:3.25rem;height:3.25rem;border-radius:50%;background:radial-gradient(circle at 30% 28%,#fff9,transparent 38%),linear-gradient(135deg,var(--em),var(--cy));box-shadow:0 14px 28px -8px var(--shc)}
+.fl{position:absolute}
+@media(prefers-reduced-motion:no-preference){.float{animation:fl 6s ease-in-out infinite}.float.b{animation-delay:-2s;animation-duration:7s}.float.c{animation-delay:-4s;animation-duration:5.5s}}
+@keyframes fl{50%{translate:0 -9px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+
+<div id="boot" class="min-h-screen grid place-items-center" role="status"><span class="spin" aria-hidden="true"></span><span class="sr-only" data-i18n="loading"></span></div>
+
+<!-- PUBLIC -->
+<div id="pub" hidden>
+ <header class="sticky top-0 z-30 border-b hdr">
+  <div class="max-w-6xl mx-auto px-4 h-16 flex items-center gap-3">
+   <a href="#top" class="flex items-center gap-2 font-bold text-lg"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--em)" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 2v4M16 2v4M3 10h18M9 15l2 2 4-4"/></svg>BookFlow</a>
+   <nav class="hidden lg:flex gap-6 text-sm mute ml-6" aria-label="Main"><a href="#features" class="lnk" data-i18n="nav_f"></a><a href="#compare" class="lnk" data-i18n="nav_c"></a><a href="#reviews" class="lnk" data-i18n="nav_r"></a><a href="#pricing" class="lnk" data-i18n="nav_p"></a><a href="#faq" class="lnk" data-i18n="nav_q"></a></nav>
+   <div class="ml-auto flex items-center gap-2">
+    <select class="fld lang-sel" data-i18n-aria="lang_l"></select>
+    <button class="btn btn-g theme-btn" data-i18n-aria="th"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+    <div class="hidden lg:flex gap-2"><button class="btn btn-g need" data-auth="login" data-i18n="signin"></button><button class="btn btn-p need" data-auth="signup" data-i18n="signup"></button></div>
+    <button id="menuBtn" class="lg:hidden btn btn-g" aria-expanded="false" aria-controls="menu" data-i18n-aria="menu">☰</button>
+   </div>
+  </div>
+  <div id="menu" hidden class="lg:hidden px-4 pb-4 flex flex-col gap-2 text-sm">
+   <a href="#features" class="py-2" data-i18n="nav_f"></a><a href="#compare" class="py-2" data-i18n="nav_c"></a><a href="#reviews" class="py-2" data-i18n="nav_r"></a><a href="#pricing" class="py-2" data-i18n="nav_p"></a><a href="#faq" class="py-2" data-i18n="nav_q"></a>
+   <button class="btn btn-g need" data-auth="login" data-i18n="signin"></button><button class="btn btn-p need" data-auth="signup" data-i18n="signup"></button>
+  </div>
+ </header>
+ <div id="cfgErr" hidden class="max-w-6xl mx-auto px-4 mt-4"><p class="glass p-4 err" role="alert" data-i18n="cfg"></p></div>
+
+ <main id="top">
+  <section id="hero" class="max-w-6xl mx-auto px-4 py-14 md:py-24 grid lg:grid-cols-2 gap-10 items-center">
+   <div>
+    <h1 class="text-4xl md:text-6xl font-bold leading-tight" data-i18n="h1"></h1>
+    <p class="mute text-lg mt-5 max-w-lg" data-i18n="sub"></p>
+    <div class="flex flex-wrap gap-3 mt-8"><button class="btn btn-p need" data-auth="signup" data-i18n="trial"></button><a href="#features" class="btn btn-g" data-i18n="explore"></a></div>
+    <p class="mute text-sm mt-4" data-i18n="heroNote"></p>
+   </div>
+   <div class="stage" id="stage" aria-hidden="true">
+    <div class="tilt" id="tilt">
+     <div class="plate lyr" style="--d:-60"></div>
+     <div class="floor"></div>
+     <div class="glass card3d lyr p-5" style="--d:0">
+      <div class="flex justify-between items-center mb-4"><span class="font-semibold" data-i18n="today"></span><span class="badge mute" data-i18n="demo"></span></div>
+      <div class="grid grid-cols-3 gap-3 mb-4">
+       <div class="tile"><div class="text-2xl font-bold">8</div><div class="text-xs mute" data-i18n="k_book"></div></div>
+       <div class="tile"><div class="text-2xl font-bold">5</div><div class="text-xs mute" data-i18n="st_paid"></div></div>
+       <div class="tile"><div class="text-2xl font-bold">3</div><div class="text-xs mute" data-i18n="st_pending"></div></div>
+      </div>
+      <div class="space-y-2">
+       <div class="rw"><span>09:30 · Ana Ruiz · <span data-i18n="svc1"></span></span><span class="ok">✓ <span data-i18n="st_paid"></span></span></div>
+       <div class="rw"><span>11:00 · Marc Soler · <span data-i18n="svc2"></span></span><span class="wn">◔ <span data-i18n="st_pending"></span></span></div>
+       <div class="rw"><span>13:15 · Lena Vogt · <span data-i18n="svc3"></span></span><span class="ok">✓ <span data-i18n="st_paid"></span></span></div>
+      </div>
+     </div>
+     <div class="fl lyr g2 p-3 text-xs" style="--d:95;top:-1.5rem;right:-.5rem"><div class="float"><div class="grid grid-cols-7 gap-1 text-center mute"><span>14</span><span>15</span><span class="rounded px-1 font-bold" style="background:var(--em);color:var(--onem)">16</span><span>17</span><span>18</span><span>19</span><span>20</span></div></div></div>
+     <div class="fl lyr g2 p-3 text-xs flex items-center gap-2" style="--d:140;top:38%;left:-1.25rem"><div class="float b flex items-center gap-2"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60" style="background:var(--em)"></span><span class="relative inline-flex h-2.5 w-2.5 rounded-full" style="background:var(--em)"></span></span><span><b data-i18n="p_new"></b><br><span class="mute">Lena V. · 13:15</span></span></div></div>
+     <div class="fl lyr g2 p-3 text-xs hidden sm:block" style="--d:115;bottom:-1.75rem;right:-.75rem;width:9.5rem"><div class="float c"><div class="mute" data-i18n="p_rev"></div><div class="text-lg font-bold" data-m="18500"></div><svg viewBox="0 0 120 30" width="100%" height="28" fill="none" stroke="var(--em)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 24 L22 18 L42 21 L62 11 L82 14 L118 3"/></svg></div></div>
+     <div class="fl lyr g2 p-3 text-xs" style="--d:70;bottom:-1.25rem;left:-.5rem"><div class="float"><span class="ok">●</span> <span data-i18n="p_link"></span></div></div>
+     <div class="orb lyr hidden sm:block" style="--d:170;top:-2.25rem;left:30%"></div>
+    </div>
+   </div>
+  </section>
+
+  <section id="benefits" class="max-w-6xl mx-auto px-4 py-14">
+   <h2 class="text-3xl font-bold mb-8" data-i18n="b_h"></h2>
+   <div class="grid md:grid-cols-3 gap-4">
+    <div class="glass p-6"><h3 class="font-semibold mb-2" data-i18n="b1t"></h3><p class="mute text-sm" data-i18n="b1d"></p></div>
+    <div class="glass p-6"><h3 class="font-semibold mb-2" data-i18n="b2t"></h3><p class="mute text-sm" data-i18n="b2d"></p></div>
+    <div class="glass p-6"><h3 class="font-semibold mb-2" data-i18n="b3t"></h3><p class="mute text-sm" data-i18n="b3d"></p></div>
+   </div>
+  </section>
+
+  <section id="features" class="max-w-6xl mx-auto px-4 py-14">
+   <h2 class="text-3xl font-bold mb-8" data-i18n="f_h"></h2>
+   <div id="featGrid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+  </section>
+
+  <section id="compare" class="max-w-6xl mx-auto px-4 py-14">
+   <h2 class="text-3xl font-bold mb-6" data-i18n="c_h"></h2>
+   <div id="cmpTabs" class="flex flex-wrap gap-2 mb-4" role="tablist"></div>
+   <div id="cmpPanel" role="tabpanel" class="grid md:grid-cols-2 gap-4">
+    <div class="glass p-6"><div class="font-semibold mb-2 mute">✕ <span data-i18n="c_wo"></span></div><p id="cB" data-i18n="c_b1"></p></div>
+    <div class="glass p-6" style="border-color:var(--em)"><div class="font-semibold mb-2 ok">✓ <span data-i18n="c_w"></span></div><p id="cA" data-i18n="c_a1"></p></div>
+   </div>
+   <div class="flex flex-wrap gap-2 mt-4">
+    <span class="chip"><span class="ok">●</span><span data-i18n="tech1"></span></span><span class="chip"><span class="ok">●</span><span data-i18n="tech2"></span></span><span class="chip"><span class="ok">●</span><span data-i18n="tech3"></span></span>
+   </div>
+  </section>
+
+  <section id="reviews" class="max-w-6xl mx-auto px-4 py-14">
+   <h2 class="text-3xl font-bold mb-8" data-i18n="r_h"></h2>
+   <div id="revGrid" class="grid md:grid-cols-3 gap-4"></div>
+  </section>
+
+  <section id="pricing" class="max-w-6xl mx-auto px-4 py-14">
+   <div class="glass p-8 md:p-10 max-w-xl mx-auto text-center">
+    <span class="pill" data-i18n="pr_b"></span>
+    <h2 class="text-2xl font-bold mt-4">BookFlow Pro</h2>
+    <p class="text-5xl font-bold mt-3" data-m="3999"></p>
+    <p class="mute text-sm mb-4" data-i18n="pr_per"></p>
+    <p class="font-semibold mb-5" data-i18n="pr_line"></p>
+    <ul id="prList" class="text-left text-sm space-y-2 mb-6 mx-auto max-w-xs"></ul>
+    <button class="btn btn-p need co w-full" data-co data-i18n="trial"></button>
+    <p class="mute text-xs mt-4" data-i18n="pr_note"></p>
+   </div>
+  </section>
+
+  <section id="faq" class="max-w-3xl mx-auto px-4 py-14">
+   <h2 class="text-3xl font-bold mb-8" data-i18n="q_h"></h2>
+   <div id="faqList" class="space-y-3"></div>
+  </section>
+ </main>
+ <footer class="border-t" style="border-color:var(--bd)"><div class="max-w-6xl mx-auto px-4 py-8 flex flex-wrap gap-4 items-center justify-between text-sm mute">
+  <span>© <span id="yr"></span> BookFlow</span><nav class="flex gap-4" aria-label="Footer"><a href="#features" class="lnk" data-i18n="nav_f"></a><a href="#pricing" class="lnk" data-i18n="nav_p"></a><a href="#faq" class="lnk" data-i18n="nav_q"></a></nav>
+  <button class="btn btn-p need" data-auth="signup" data-i18n="trial"></button>
+ </div></footer>
+</div>
+
+<!-- PRIVATE APP -->
+<div id="app" hidden class="min-h-screen">
+ <header class="border-b sticky top-0 z-30 hdr">
+  <div class="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
+   <span class="font-bold text-lg">BookFlow</span>
+   <nav id="tabs" class="flex gap-1 overflow-x-auto order-3 w-full md:order-none md:w-auto md:ml-6" role="tablist" aria-label="Dashboard"></nav>
+   <span id="who" class="ml-auto text-sm mute hidden lg:inline truncate max-w-[14rem]"></span>
+   <select class="fld lang-sel max-md:ml-auto" data-i18n-aria="lang_l"></select>
+   <button class="btn btn-g theme-btn" data-i18n-aria="th"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+   <button id="outBtn" class="btn btn-g" data-i18n="signout"></button>
+  </div>
+ </header>
+ <main class="max-w-5xl mx-auto px-4 py-8">
+  <div id="dashLoad" hidden class="space-y-3" role="status"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div>
+  <p id="dashErr" hidden class="glass p-4 err mb-4" role="alert"></p>
+  <div id="dashBody">
+   <section id="p-overview" role="tabpanel">
+    <div class="flex flex-wrap items-start justify-between gap-3 mb-4"><h1 class="text-2xl font-bold" data-i18n="tab_overview"></h1><div class="sm:text-right"><button class="btn btn-p co" data-co data-i18n="trial"></button><p class="mute text-xs mt-1 max-w-xs sm:ml-auto" data-i18n="co_note"></p></div></div>
+    <div id="stats" class="grid grid-cols-3 gap-3 mb-6"></div>
+    <h2 class="font-semibold mb-2" data-i18n="up_h"></h2><div id="upcoming" class="space-y-2"></div>
+    <p class="mute text-xs mt-6" data-i18n="ov_note"></p>
+   </section>
+   <section id="p-bookings" role="tabpanel" hidden>
+    <h1 class="text-2xl font-bold mb-4" data-i18n="k_book"></h1>
+    <form id="bkForm" class="glass p-4 grid sm:grid-cols-6 gap-3 mb-4" novalidate>
+     <div class="sm:col-span-2"><label for="bName" data-i18n="f_name"></label><input id="bName" class="fld mt-1" maxlength="80" autocomplete="off"></div>
+     <div class="sm:col-span-2"><label for="bEmail" data-i18n="f_email"></label><input id="bEmail" type="email" class="fld mt-1" maxlength="254" autocomplete="off"></div>
+     <div class="sm:col-span-2"><label for="bSvc" data-i18n="f_svc"></label><input id="bSvc" class="fld mt-1" maxlength="80" autocomplete="off"></div>
+     <div class="sm:col-span-2"><label for="bDate" data-i18n="f_date"></label><input id="bDate" type="date" class="fld mt-1"></div>
+     <div class="sm:col-span-2"><label for="bAmt" data-i18n="f_amt"></label><input id="bAmt" inputmode="decimal" class="fld mt-1" placeholder="25.00"></div>
+     <div class="sm:col-span-2 flex items-end"><button id="bkBtn" class="btn btn-p w-full" data-i18n="bk_add"></button></div>
+     <p id="bkErr" class="err sm:col-span-6" role="alert" hidden></p>
+    </form>
+    <div id="filters" class="flex gap-2 mb-3 flex-wrap"></div><div id="list" class="space-y-2"></div>
+   </section>
+   <section id="p-orders" role="tabpanel" hidden><h1 class="text-2xl font-bold mb-4" data-i18n="tab_orders"></h1><div id="orders" class="space-y-2"></div></section>
+   <section id="p-account" role="tabpanel" hidden><h1 class="text-2xl font-bold mb-4" data-i18n="tab_account"></h1><div class="glass p-5 text-sm space-y-1"><div class="mute" data-i18n="acct_as"></div><div id="acctMail" class="font-semibold break-all"></div></div></section>
+  </div>
+ </main>
+</div>
+
+<dialog id="authDlg" aria-labelledby="adT">
+ <form id="authForm" class="p-6 space-y-4" novalidate>
+  <div class="flex justify-between items-center"><h2 id="adT" class="text-xl font-bold"></h2><button type="button" id="adX" class="btn btn-g" data-i18n-aria="close">✕</button></div>
+  <div class="flex gap-1 p-1 rounded-lg" style="background:var(--bg2)" role="group" data-i18n-aria="mode_l"><button type="button" id="mIn" class="btn flex-1" data-i18n="signin"></button><button type="button" id="mUp" class="btn flex-1" data-i18n="au_create"></button></div>
+  <div><label for="aMail" data-i18n="au_email"></label><input id="aMail" type="email" class="fld mt-1" autocomplete="email" maxlength="254"></div>
+  <div><label for="aPass" data-i18n="au_pass"></label><div class="flex gap-2 mt-1"><input id="aPass" type="password" class="fld" autocomplete="current-password" maxlength="128"><button type="button" id="aEye" class="btn btn-g" aria-pressed="false">👁</button></div></div>
+  <div id="aP2w" hidden><label for="aPass2" data-i18n="au_pass2"></label><input id="aPass2" type="password" class="fld mt-1" autocomplete="new-password" maxlength="128"></div>
+  <p id="aErr" class="err" role="alert" hidden></p><p id="aInfo" class="ok text-sm" role="status" hidden></p>
+  <button id="aBtn" class="btn btn-p w-full"></button>
+ </form>
+</dialog>
+<div id="toasts" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]" aria-live="polite"></div>
+
+<script>
+(() => {
+'use strict';
+/* ---------- config ---------- */
+const CFG = { url: 'https://frbihsiupbuunswyzpkt.supabase.co', key: 'sb_publishable_MyUAvujNAhCn1Jevqzk2nQ_oSBCIO4', fn: 'create-checkout', host: 'checkout.stripe.com' };
+const COLS = 'id, client_name, client_email, service, booking_date, amount_cents, status, created_at';
+const ICONS = [
+ '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+ '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6M17 11a3 3 0 1 0 0-6"/>',
+ '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+ '<path d="M3 3v18h18M7 15l4-4 3 3 5-6"/>',
+ '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>'
+];
+const TABS = ['overview', 'bookings', 'orders', 'account'];
+const TAB_KEY = { overview: 'tab_overview', bookings: 'k_book', orders: 'tab_orders', account: 'tab_account' };
+const ORDER = { pending: ['os_pending', 'wn'], paid: ['os_paid', 'ok'], failed: ['os_failed', 'no'], expired: ['os_expired', 'mute'] };
+
+/* ---------- i18n: key -> [en, es, fr, de, it, pt] ---------- */
+const LANGS = [['en', 'English'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['it', 'Italiano'], ['pt', 'Português']];
+const LOC = { en: 'en-IE', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT', pt: 'pt-PT' };
+const D = {
+ title: ['BookFlow — appointments, clients and payments in one place', 'BookFlow — citas, clientes y cobros en un solo lugar', 'BookFlow — rendez-vous, clients et paiements au même endroit', 'BookFlow — Termine, Kunden und Zahlungen an einem Ort', 'BookFlow — appuntamenti, clienti e pagamenti in un unico posto', 'BookFlow — marcações, clientes e pagamentos num só lugar'],
+ loading: ['Loading BookFlow', 'Cargando BookFlow', 'Chargement de BookFlow', 'BookFlow wird geladen', 'Caricamento di BookFlow', 'A carregar o BookFlow'],
+ lang_l: ['Language', 'Idioma', 'Langue', 'Sprache', 'Lingua', 'Idioma'],
+ th: ['Toggle light/dark theme', 'Cambiar tema claro/oscuro', 'Basculer thème clair/sombre', 'Hell/Dunkel umschalten', 'Cambia tema chiaro/scuro', 'Alternar tema claro/escuro'],
+ menu: ['Menu', 'Menú', 'Menu', 'Menü', 'Menu', 'Menu'],
+ nav_f: ['Features', 'Funciones', 'Fonctionnalités', 'Funktionen', 'Funzionalità', 'Funcionalidades'],
+ nav_c: ['Compare', 'Comparar', 'Comparer', 'Vergleich', 'Confronto', 'Comparar'],
+ nav_r: ['Reviews', 'Opiniones', 'Avis', 'Stimmen', 'Recensioni', 'Opiniões'],
+ nav_p: ['Pricing', 'Precios', 'Tarifs', 'Preise', 'Prezzi', 'Preços'],
+ nav_q: ['FAQ', 'FAQ', 'FAQ', 'FAQ', 'FAQ', 'FAQ'],
+ signin: ['Sign in', 'Iniciar sesión', 'Se connecter', 'Anmelden', 'Accedi', 'Entrar'],
+ signup: ['Get started', 'Empezar', 'Commencer', 'Loslegen', 'Inizia', 'Começar'],
+ cfg: ['Sign-in is unavailable: the app is not configured correctly. The public pages still work.', 'El acceso no está disponible: la aplicación no está bien configurada. Las páginas públicas siguen funcionando.', 'Connexion indisponible : l’application n’est pas correctement configurée. Les pages publiques restent accessibles.', 'Anmeldung nicht verfügbar: Die App ist nicht korrekt konfiguriert. Die öffentlichen Seiten funktionieren weiterhin.', 'Accesso non disponibile: l’app non è configurata correttamente. Le pagine pubbliche continuano a funzionare.', 'Início de sessão indisponível: a aplicação não está bem configurada. As páginas públicas continuam a funcionar.'],
+ h1: ['Your schedule. Your clients. Under control.', 'Tu agenda. Tus clientes. Bajo control.', 'Votre agenda. Vos clients. Sous contrôle.', 'Ihr Terminkalender. Ihre Kunden. Alles im Griff.', 'La tua agenda. I tuoi clienti. Sotto controllo.', 'A sua agenda. Os seus clientes. Sob controlo.'],
+ sub: ['Manage appointments, organize customer information, and keep payments moving from one simple workspace. Less administrative work, fewer missed bookings, and more time for your business.', 'Gestiona citas, organiza la información de tus clientes y mantén los cobros en marcha desde un único espacio. Menos trabajo administrativo, menos citas perdidas y más tiempo para tu negocio.', 'Gérez vos rendez-vous, organisez les informations clients et faites avancer les paiements depuis un espace unique. Moins d’administratif, moins de réservations manquées, plus de temps pour votre activité.', 'Verwalten Sie Termine, ordnen Sie Kundendaten und behalten Sie Zahlungen im Fluss – an einem einzigen Ort. Weniger Verwaltungsaufwand, weniger verpasste Buchungen, mehr Zeit für Ihr Geschäft.', 'Gestisci gli appuntamenti, organizza i dati dei clienti e tieni i pagamenti in movimento da un unico spazio. Meno burocrazia, meno prenotazioni perse e più tempo per la tua attività.', 'Gira marcações, organize os dados dos clientes e mantenha os pagamentos em andamento num só espaço. Menos trabalho administrativo, menos marcações perdidas e mais tempo para o seu negócio.'],
+ trial: ['Start your 14-day free trial', 'Empieza tu prueba gratuita de 14 días', 'Commencez votre essai gratuit de 14 jours', 'Starten Sie Ihre 14-tägige kostenlose Testphase', 'Inizia la prova gratuita di 14 giorni', 'Comece o seu teste gratuito de 14 dias'],
+ explore: ['Explore the platform', 'Explorar la plataforma', 'Découvrir la plateforme', 'Plattform entdecken', 'Scopri la piattaforma', 'Explorar a plataforma'],
+ heroNote: ['14-day free trial included · Secure checkout by Stripe', 'Prueba gratuita de 14 días incluida · Pago seguro con Stripe', 'Essai gratuit de 14 jours inclus · Paiement sécurisé par Stripe', '14 Tage kostenlos testen inklusive · Sicherer Checkout mit Stripe', 'Prova gratuita di 14 giorni inclusa · Pagamento sicuro con Stripe', 'Teste gratuito de 14 dias incluído · Pagamento seguro com Stripe'],
+ today: ['Today', 'Hoy', 'Aujourd’hui', 'Heute', 'Oggi', 'Hoje'],
+ demo: ['Demo data', 'Datos de ejemplo', 'Données de démo', 'Demodaten', 'Dati demo', 'Dados de demonstração'],
+ k_book: ['Bookings', 'Citas', 'Réservations', 'Buchungen', 'Prenotazioni', 'Marcações'],
+ st_paid: ['Paid', 'Pagada', 'Payée', 'Bezahlt', 'Pagata', 'Paga'],
+ st_pending: ['Pending', 'Pendiente', 'En attente', 'Ausstehend', 'In attesa', 'Pendente'],
+ st_cancelled: ['Cancelled', 'Cancelada', 'Annulée', 'Storniert', 'Annullata', 'Cancelada'],
+ svc1: ['Consultation', 'Consulta', 'Consultation', 'Beratung', 'Consulenza', 'Consulta'],
+ svc2: ['Follow-up', 'Seguimiento', 'Suivi', 'Nachkontrolle', 'Controllo', 'Acompanhamento'],
+ svc3: ['Session', 'Sesión', 'Séance', 'Sitzung', 'Sessione', 'Sessão'],
+ p_link: ['Payment link ready · Demo', 'Enlace de pago listo · Demo', 'Lien de paiement prêt · Démo', 'Zahlungslink bereit · Demo', 'Link di pagamento pronto · Demo', 'Link de pagamento pronto · Demo'],
+ p_new: ['New booking', 'Nueva cita', 'Nouvelle réservation', 'Neue Buchung', 'Nuova prenotazione', 'Nova marcação'],
+ p_rev: ['Paid today', 'Cobrado hoy', 'Encaissé aujourd’hui', 'Heute bezahlt', 'Incassato oggi', 'Recebido hoje'],
+ b_h: ['Less scattered work, more clarity', 'Menos dispersión, más claridad', 'Moins de dispersion, plus de clarté', 'Weniger Chaos, mehr Klarheit', 'Meno dispersione, più chiarezza', 'Menos dispersão, mais clareza'],
+ b1t: ['Missed appointments', 'Citas perdidas', 'Rendez-vous manqués', 'Verpasste Termine', 'Appuntamenti persi', 'Marcações perdidas'],
+ b1d: ['Manual scheduling and scattered reminders make a reliable calendar harder to keep. BookFlow gives every booking one place to live.', 'La agenda manual y los recordatorios dispersos dificultan mantener un calendario fiable. BookFlow da a cada cita un único lugar.', 'Un planning manuel et des rappels éparpillés compliquent la tenue d’un agenda fiable. BookFlow donne à chaque réservation une seule place.', 'Manuelle Planung und verstreute Erinnerungen machen einen verlässlichen Kalender schwer. BookFlow gibt jeder Buchung einen festen Platz.', 'Agenda manuale e promemoria sparsi rendono difficile un calendario affidabile. BookFlow dà a ogni prenotazione un posto unico.', 'A agenda manual e os lembretes dispersos dificultam um calendário fiável. O BookFlow dá a cada marcação um lugar único.'],
+ b2t: ['Fragmented customer records', 'Fichas de clientes fragmentadas', 'Fiches clients éclatées', 'Verstreute Kundendaten', 'Schede clienti frammentate', 'Fichas de clientes fragmentadas'],
+ b2d: ['Names, contacts and booking history end up in several tools. Keep them together and searchable by status.', 'Nombres, contactos e historial acaban en varias herramientas. Mantenlos juntos y filtrables por estado.', 'Noms, contacts et historique finissent dans plusieurs outils. Gardez-les réunis et filtrables par statut.', 'Namen, Kontakte und Buchungsverlauf landen in mehreren Tools. Halten Sie alles zusammen und nach Status filterbar.', 'Nomi, contatti e storico finiscono in più strumenti. Tienili insieme e filtrabili per stato.', 'Nomes, contactos e histórico acabam em várias ferramentas. Mantenha tudo junto e filtrável por estado.'],
+ b3t: ['Unclear payment workflows', 'Cobros poco claros', 'Paiements peu clairs', 'Unklare Zahlungsabläufe', 'Pagamenti poco chiari', 'Pagamentos pouco claros'],
+ b3d: ['When booking and payment are disconnected, so is your admin. Start a secure Stripe checkout and see each order’s status.', 'Si reserva y cobro van por separado, tu gestión también. Inicia un pago seguro con Stripe y consulta el estado de cada pedido.', 'Quand réservation et paiement sont déconnectés, votre gestion l’est aussi. Lancez un paiement Stripe sécurisé et suivez l’état de chaque commande.', 'Wenn Buchung und Zahlung getrennt laufen, leidet die Verwaltung. Starten Sie einen sicheren Stripe-Checkout und sehen Sie den Status jeder Bestellung.', 'Se prenotazione e pagamento sono separati, lo è anche la gestione. Avvia un pagamento Stripe sicuro e controlla lo stato di ogni ordine.', 'Quando marcação e pagamento andam separados, a gestão também. Inicie um pagamento seguro com Stripe e veja o estado de cada encomenda.'],
+ f_h: ['What you can do', 'Lo que puedes hacer', 'Ce que vous pouvez faire', 'Was Sie tun können', 'Cosa puoi fare', 'O que pode fazer'],
+ f1t: ['Appointment management', 'Gestión de citas', 'Gestion des rendez-vous', 'Terminverwaltung', 'Gestione appuntamenti', 'Gestão de marcações'],
+ f1d: ['Add, filter and cancel bookings from one list.', 'Añade, filtra y cancela citas desde una sola lista.', 'Ajoutez, filtrez et annulez les réservations depuis une seule liste.', 'Buchungen in einer Liste hinzufügen, filtern und stornieren.', 'Aggiungi, filtra e annulla le prenotazioni da un’unica lista.', 'Adicione, filtre e cancele marcações numa só lista.'],
+ f2t: ['Customer organization', 'Organización de clientes', 'Organisation des clients', 'Kundenverwaltung', 'Organizzazione clienti', 'Organização de clientes'],
+ f2d: ['Keep each client’s name, email and service together.', 'Mantén juntos el nombre, el email y el servicio de cada cliente.', 'Gardez réunis le nom, l’e-mail et le service de chaque client.', 'Name, E-Mail und Leistung jedes Kunden an einem Ort.', 'Tieni insieme nome, email e servizio di ogni cliente.', 'Mantenha juntos o nome, o email e o serviço de cada cliente.'],
+ f3t: ['Payment workflow', 'Flujo de cobro', 'Flux de paiement', 'Zahlungsablauf', 'Flusso di pagamento', 'Fluxo de pagamento'],
+ f3d: ['Start a secure Stripe checkout and track order status.', 'Inicia un pago seguro con Stripe y sigue el estado del pedido.', 'Lancez un paiement Stripe sécurisé et suivez l’état de la commande.', 'Sicheren Stripe-Checkout starten und den Bestellstatus verfolgen.', 'Avvia un pagamento Stripe sicuro e segui lo stato dell’ordine.', 'Inicie um pagamento seguro com Stripe e acompanhe o estado da encomenda.'],
+ f4t: ['Business overview', 'Visión del negocio', 'Vue d’ensemble', 'Geschäftsübersicht', 'Panoramica dell’attività', 'Visão do negócio'],
+ f4d: ['See bookings, pending items and what is coming up.', 'Consulta citas, pendientes y lo que viene.', 'Consultez réservations, éléments en attente et à venir.', 'Buchungen, offene Punkte und Anstehendes im Blick.', 'Vedi prenotazioni, elementi in sospeso e prossimi impegni.', 'Veja marcações, pendentes e o que se segue.'],
+ f5t: ['Responsive access', 'Acceso desde cualquier dispositivo', 'Accès sur tous les appareils', 'Zugriff auf jedem Gerät', 'Accesso da ogni dispositivo', 'Acesso em qualquer dispositivo'],
+ f5d: ['Works on phones, tablets and desktops.', 'Funciona en móviles, tablets y ordenadores.', 'Fonctionne sur mobiles, tablettes et ordinateurs.', 'Funktioniert auf Smartphone, Tablet und Desktop.', 'Funziona su smartphone, tablet e computer.', 'Funciona em telemóveis, tablets e computadores.'],
+ c_h: ['See the difference', 'Mira la diferencia', 'Voyez la différence', 'Der Unterschied', 'Guarda la differenza', 'Veja a diferença'],
+ c_t1: ['Scheduling', 'Agenda', 'Planning', 'Terminplanung', 'Agenda', 'Agenda'],
+ c_t2: ['Clients', 'Clientes', 'Clients', 'Kunden', 'Clienti', 'Clientes'],
+ c_t3: ['Payments', 'Cobros', 'Paiements', 'Zahlungen', 'Pagamenti', 'Pagamentos'],
+ c_wo: ['Without BookFlow', 'Sin BookFlow', 'Sans BookFlow', 'Ohne BookFlow', 'Senza BookFlow', 'Sem BookFlow'],
+ c_w: ['With BookFlow', 'Con BookFlow', 'Avec BookFlow', 'Mit BookFlow', 'Con BookFlow', 'Com BookFlow'],
+ c_b1: ['Bookings split between a notebook, chats and a calendar.', 'Citas repartidas entre libreta, chats y calendario.', 'Réservations dispersées entre carnet, messages et agenda.', 'Buchungen verteilt auf Notizbuch, Chats und Kalender.', 'Prenotazioni sparse tra quaderno, chat e calendario.', 'Marcações divididas entre caderno, chats e calendário.'],
+ c_a1: ['Every booking in one list you can filter by status.', 'Cada cita en una lista que filtras por estado.', 'Chaque réservation dans une liste filtrable par statut.', 'Jede Buchung in einer nach Status filterbaren Liste.', 'Ogni prenotazione in un’unica lista filtrabile per stato.', 'Cada marcação numa lista filtrável por estado.'],
+ c_b2: ['Contact details in spreadsheets and old emails.', 'Datos de contacto en hojas de cálculo y correos antiguos.', 'Coordonnées dans des tableurs et d’anciens e-mails.', 'Kontaktdaten in Tabellen und alten E-Mails.', 'Contatti in fogli di calcolo e vecchie email.', 'Contactos em folhas de cálculo e emails antigos.'],
+ c_a2: ['Name, email, service and date saved together per client.', 'Nombre, email, servicio y fecha guardados juntos por cliente.', 'Nom, e-mail, service et date réunis pour chaque client.', 'Name, E-Mail, Leistung und Datum pro Kunde gebündelt.', 'Nome, email, servizio e data salvati insieme per cliente.', 'Nome, email, serviço e data guardados juntos por cliente.'],
+ c_b3: ['Payment requests sent by hand, status unclear.', 'Cobros enviados a mano, estado poco claro.', 'Demandes de paiement envoyées à la main, statut flou.', 'Zahlungsanfragen von Hand, Status unklar.', 'Richieste di pagamento inviate a mano, stato poco chiaro.', 'Pedidos de pagamento enviados à mão, estado pouco claro.'],
+ c_a3: ['Secure Stripe checkout, with each order’s status under Orders.', 'Pago seguro con Stripe y el estado de cada pedido en Pedidos.', 'Paiement Stripe sécurisé, état de chaque commande dans Commandes.', 'Sicherer Stripe-Checkout, Status jeder Bestellung unter Bestellungen.', 'Pagamento Stripe sicuro, stato di ogni ordine in Ordini.', 'Pagamento seguro com Stripe e estado de cada encomenda em Encomendas.'],
+ tech1: ['Each account sees only its own data (row-level security)', 'Cada cuenta ve solo sus datos (seguridad por filas)', 'Chaque compte ne voit que ses données (sécurité au niveau des lignes)', 'Jedes Konto sieht nur eigene Daten (Row-Level-Security)', 'Ogni account vede solo i propri dati (sicurezza a livello di riga)', 'Cada conta vê apenas os seus dados (segurança ao nível da linha)'],
+ tech2: ['Payments handled by Stripe Checkout', 'Pagos gestionados por Stripe Checkout', 'Paiements gérés par Stripe Checkout', 'Zahlungen über Stripe Checkout', 'Pagamenti gestiti da Stripe Checkout', 'Pagamentos tratados pelo Stripe Checkout'],
+ tech3: ['No install: runs in any modern browser', 'Sin instalación: funciona en cualquier navegador moderno', 'Sans installation : fonctionne dans tout navigateur moderne', 'Keine Installation: läuft in jedem modernen Browser', 'Nessuna installazione: funziona in ogni browser moderno', 'Sem instalação: funciona em qualquer navegador moderno'],
+ r_h: ['Success stories from across Europe', 'Casos de éxito de toda Europa', 'Témoignages de toute l’Europe', 'Erfolgsgeschichten aus ganz Europa', 'Storie di successo da tutta Europa', 'Histórias de sucesso de toda a Europa'],
+ r1q: ['I stopped chasing confirmations over chat. Every session and its payment status sit in one list.', 'Dejé de perseguir confirmaciones por chat. Cada sesión y el estado de su pago están en una sola lista.', 'Je ne cours plus après les confirmations par messagerie. Chaque séance et l’état de son paiement sont dans une seule liste.', 'Ich jage keinen Bestätigungen per Chat mehr hinterher. Jede Sitzung samt Zahlungsstatus steht in einer Liste.', 'Non rincorro più le conferme in chat. Ogni seduta e lo stato del pagamento sono in un’unica lista.', 'Deixei de perseguir confirmações por chat. Cada sessão e o estado do pagamento estão numa só lista.'],
+ r1r: ['Physiotherapist · Milan', 'Fisioterapeuta · Milán', 'Kinésithérapeute · Milan', 'Physiotherapeutin · Mailand', 'Fisioterapista · Milano', 'Fisioterapeuta · Milão'],
+ r2q: ['Setup took an afternoon. My clients book, I see who has paid, and the week finally feels planned.', 'La puesta en marcha me llevó una tarde. Mis clientes reservan, veo quién ha pagado y la semana por fin está organizada.', 'La prise en main a pris un après-midi. Mes clients réservent, je vois qui a payé et la semaine est enfin organisée.', 'Die Einrichtung dauerte einen Nachmittag. Kunden buchen, ich sehe, wer bezahlt hat – die Woche ist endlich geplant.', 'La configurazione ha richiesto un pomeriggio. I clienti prenotano, vedo chi ha pagato e la settimana è finalmente organizzata.', 'A configuração demorou uma tarde. Os clientes marcam, vejo quem pagou e a semana está finalmente organizada.'],
+ r2r: ['Personal trainer · Lyon', 'Entrenador personal · Lyon', 'Coach sportif · Lyon', 'Personal Trainer · Lyon', 'Personal trainer · Lione', 'Personal trainer · Lyon'],
+ r3q: ['Clean, quick and in my own language. The overview tells me what is coming up before I open the salon.', 'Limpio, rápido y en mi idioma. El resumen me dice qué viene antes de abrir el salón.', 'Net, rapide et dans ma langue. L’aperçu m’indique ce qui m’attend avant d’ouvrir le salon.', 'Übersichtlich, schnell und in meiner Sprache. Die Übersicht zeigt, was ansteht, bevor ich den Salon öffne.', 'Pulito, veloce e nella mia lingua. La panoramica mi dice cosa mi aspetta prima di aprire il salone.', 'Limpo, rápido e na minha língua. A visão geral diz-me o que vem aí antes de abrir o salão.'],
+ r3r: ['Hair stylist · Hamburg', 'Estilista · Hamburgo', 'Coiffeuse · Hambourg', 'Friseurin · Hamburg', 'Parrucchiera · Amburgo', 'Cabeleireira · Hamburgo'],
+ pr_b: ['14-day free trial', 'Prueba gratuita de 14 días', 'Essai gratuit de 14 jours', '14 Tage kostenlos testen', 'Prova gratuita di 14 giorni', 'Teste gratuito de 14 dias'],
+ pr_per: ['per month after the trial', 'al mes tras la prueba', 'par mois après l’essai', 'pro Monat nach der Testphase', 'al mese dopo la prova', 'por mês após o teste'],
+ pr_line: ['Try BookFlow Pro free for 14 days, then {p}/mo', 'Prueba BookFlow Pro gratis durante 14 días y después {p}/mes', 'Essayez BookFlow Pro gratuitement pendant 14 jours, puis {p}/mois', 'BookFlow Pro 14 Tage kostenlos testen, danach {p}/Monat', 'Prova BookFlow Pro gratis per 14 giorni, poi {p}/mese', 'Experimente o BookFlow Pro grátis durante 14 dias, depois {p}/mês'],
+ pr_note: ['The final price and terms are confirmed on the secure Stripe checkout page.', 'El precio final y las condiciones se confirman en la página segura de pago de Stripe.', 'Le prix final et les conditions sont confirmés sur la page de paiement sécurisée de Stripe.', 'Endpreis und Bedingungen werden auf der sicheren Stripe-Checkout-Seite bestätigt.', 'Prezzo finale e condizioni sono confermati nella pagina di pagamento sicura di Stripe.', 'O preço final e as condições são confirmados na página de pagamento segura da Stripe.'],
+ q_h: ['Frequently asked questions', 'Preguntas frecuentes', 'Questions fréquentes', 'Häufige Fragen', 'Domande frequenti', 'Perguntas frequentes'],
+ q1: ['Is my data secure?', '¿Están seguros mis datos?', 'Mes données sont-elles en sécurité ?', 'Sind meine Daten sicher?', 'I miei dati sono al sicuro?', 'Os meus dados estão seguros?'],
+ a1: ['Your bookings are stored with row-level security, so each account can only read and change its own records. Card details are entered on Stripe and never reach BookFlow.', 'Tus citas se guardan con seguridad por filas: cada cuenta solo puede leer y modificar sus propios registros. Los datos de la tarjeta se introducen en Stripe y nunca llegan a BookFlow.', 'Vos réservations sont protégées par une sécurité au niveau des lignes : chaque compte ne lit et ne modifie que ses propres données. Les données de carte sont saisies chez Stripe et n’arrivent jamais à BookFlow.', 'Ihre Buchungen sind per Row-Level-Security geschützt: Jedes Konto kann nur eigene Datensätze lesen und ändern. Kartendaten werden bei Stripe eingegeben und erreichen BookFlow nie.', 'Le prenotazioni sono protette con sicurezza a livello di riga: ogni account legge e modifica solo i propri dati. I dati della carta si inseriscono su Stripe e non arrivano mai a BookFlow.', 'As marcações são guardadas com segurança ao nível da linha: cada conta só lê e altera os seus registos. Os dados do cartão são introduzidos na Stripe e nunca chegam ao BookFlow.'],
+ q2: ['How do payments work?', '¿Cómo funcionan los pagos?', 'Comment fonctionnent les paiements ?', 'Wie funktionieren Zahlungen?', 'Come funzionano i pagamenti?', 'Como funcionam os pagamentos?'],
+ a2: ['Checkout runs on Stripe. The price is set on the server, and an order only shows as paid after Stripe confirms it.', 'El pago se hace en Stripe. El precio se fija en el servidor y un pedido solo aparece como pagado cuando Stripe lo confirma.', 'Le paiement se fait sur Stripe. Le prix est fixé côté serveur et une commande n’apparaît comme payée qu’après confirmation de Stripe.', 'Der Checkout läuft über Stripe. Der Preis wird serverseitig festgelegt, und eine Bestellung gilt erst als bezahlt, wenn Stripe sie bestätigt.', 'Il pagamento avviene su Stripe. Il prezzo è stabilito dal server e un ordine risulta pagato solo dopo la conferma di Stripe.', 'O pagamento é feito na Stripe. O preço é definido no servidor e uma encomenda só aparece como paga depois de a Stripe a confirmar.'],
+ q3: ['How does the 14-day free trial work?', '¿Cómo funciona la prueba gratuita de 14 días?', 'Comment fonctionne l’essai gratuit de 14 jours ?', 'Wie funktioniert die 14-tägige Testphase?', 'Come funziona la prova gratuita di 14 giorni?', 'Como funciona o teste gratuito de 14 dias?'],
+ a3: ['Use any trial button to open Stripe checkout. It shows the trial length, the first charge date and the monthly price before you confirm.', 'Pulsa cualquier botón de prueba para abrir el pago de Stripe. Allí verás la duración de la prueba, la fecha del primer cobro y el precio mensual antes de confirmar.', 'Utilisez n’importe quel bouton d’essai pour ouvrir le paiement Stripe. Il indique la durée de l’essai, la date du premier prélèvement et le prix mensuel avant confirmation.', 'Über jeden Testen-Button öffnen Sie den Stripe-Checkout. Dort sehen Sie vor der Bestätigung die Testdauer, das Datum der ersten Abbuchung und den Monatspreis.', 'Usa uno qualsiasi dei pulsanti di prova per aprire il pagamento Stripe. Prima di confermare vedrai la durata della prova, la data del primo addebito e il prezzo mensile.', 'Use qualquer botão de teste para abrir o pagamento da Stripe. Antes de confirmar, vê a duração do teste, a data da primeira cobrança e o preço mensal.'],
+ q4: ['How long does setup take?', '¿Cuánto se tarda en empezar?', 'Combien de temps faut-il pour démarrer ?', 'Wie lange dauert die Einrichtung?', 'Quanto ci vuole per iniziare?', 'Quanto tempo demora a configurar?'],
+ a4: ['Create an account, confirm your email and add your first booking. There is nothing to install.', 'Crea una cuenta, confirma tu email y añade tu primera cita. No hay nada que instalar.', 'Créez un compte, confirmez votre e-mail et ajoutez votre première réservation. Rien à installer.', 'Konto erstellen, E-Mail bestätigen, erste Buchung anlegen. Es muss nichts installiert werden.', 'Crea un account, conferma l’email e aggiungi la prima prenotazione. Non c’è nulla da installare.', 'Crie uma conta, confirme o email e adicione a primeira marcação. Não há nada para instalar.'],
+ q5: ['How do I get support?', '¿Cómo obtengo ayuda?', 'Comment obtenir de l’aide ?', 'Wie bekomme ich Support?', 'Come ottengo assistenza?', 'Como obtenho apoio?'],
+ a5: ['Write to the support address in your account emails and we will help. Booking and order statuses are always visible in your dashboard.', 'Escribe a la dirección de soporte que aparece en los emails de tu cuenta y te ayudaremos. El estado de citas y pedidos siempre está visible en tu panel.', 'Écrivez à l’adresse de support indiquée dans les e-mails de votre compte et nous vous aiderons. L’état des réservations et commandes est toujours visible dans votre tableau de bord.', 'Schreiben Sie an die Support-Adresse in Ihren Konto-E-Mails, wir helfen Ihnen weiter. Buchungs- und Bestellstatus sehen Sie jederzeit im Dashboard.', 'Scrivi all’indirizzo di assistenza indicato nelle email del tuo account e ti aiuteremo. Lo stato di prenotazioni e ordini è sempre visibile nella dashboard.', 'Escreva para o endereço de apoio indicado nos emails da sua conta e ajudaremos. O estado das marcações e encomendas está sempre visível no painel.'],
+ tab_overview: ['Overview', 'Resumen', 'Aperçu', 'Übersicht', 'Panoramica', 'Visão geral'],
+ tab_orders: ['Orders', 'Pedidos', 'Commandes', 'Bestellungen', 'Ordini', 'Encomendas'],
+ tab_account: ['Account', 'Cuenta', 'Compte', 'Konto', 'Account', 'Conta'],
+ signout: ['Sign out', 'Cerrar sesión', 'Se déconnecter', 'Abmelden', 'Esci', 'Terminar sessão'],
+ co_note: ['Then {p}/mo. Final terms are confirmed at checkout.', 'Después, {p}/mes. Las condiciones finales se confirman al pagar.', 'Puis {p}/mois. Les conditions finales sont confirmées au paiement.', 'Danach {p}/Monat. Endgültige Bedingungen im Checkout.', 'Poi {p}/mese. Le condizioni finali si confermano al pagamento.', 'Depois {p}/mês. As condições finais são confirmadas no pagamento.'],
+ up_h: ['Upcoming appointments', 'Próximas citas', 'Prochains rendez-vous', 'Anstehende Termine', 'Prossimi appuntamenti', 'Próximas marcações'],
+ up_none: ['No upcoming appointments. Add one under Bookings.', 'No hay citas próximas. Añade una en Citas.', 'Aucun rendez-vous à venir. Ajoutez-en un dans Réservations.', 'Keine anstehenden Termine. Legen Sie einen unter Buchungen an.', 'Nessun appuntamento in arrivo. Aggiungine uno in Prenotazioni.', 'Sem marcações próximas. Adicione uma em Marcações.'],
+ ov_note: ['Subscription status is shown under Orders once Stripe has confirmed a payment.', 'El estado de la suscripción aparece en Pedidos cuando Stripe confirma un pago.', 'L’état de l’abonnement apparaît dans Commandes une fois le paiement confirmé par Stripe.', 'Der Abostatus erscheint unter Bestellungen, sobald Stripe eine Zahlung bestätigt hat.', 'Lo stato dell’abbonamento compare in Ordini quando Stripe conferma un pagamento.', 'O estado da subscrição aparece em Encomendas quando a Stripe confirma um pagamento.'],
+ f_name: ['Client name', 'Nombre del cliente', 'Nom du client', 'Name des Kunden', 'Nome del cliente', 'Nome do cliente'],
+ f_email: ['Client email (optional)', 'Email del cliente (opcional)', 'E-mail du client (facultatif)', 'E-Mail des Kunden (optional)', 'Email del cliente (facoltativa)', 'Email do cliente (opcional)'],
+ f_svc: ['Service', 'Servicio', 'Service', 'Leistung', 'Servizio', 'Serviço'],
+ f_date: ['Date', 'Fecha', 'Date', 'Datum', 'Data', 'Data'],
+ f_amt: ['Amount (EUR)', 'Importe (EUR)', 'Montant (EUR)', 'Betrag (EUR)', 'Importo (EUR)', 'Montante (EUR)'],
+ bk_add: ['Add booking', 'Añadir cita', 'Ajouter la réservation', 'Buchung hinzufügen', 'Aggiungi prenotazione', 'Adicionar marcação'],
+ bk_busy: ['Adding…', 'Añadiendo…', 'Ajout…', 'Wird hinzugefügt…', 'Aggiunta…', 'A adicionar…'],
+ fl_all: ['All', 'Todas', 'Toutes', 'Alle', 'Tutte', 'Todas'],
+ bk_empty: ['No bookings yet. Add your first one above.', 'Aún no hay citas. Añade la primera arriba.', 'Aucune réservation. Ajoutez la première ci-dessus.', 'Noch keine Buchungen. Legen Sie oben die erste an.', 'Ancora nessuna prenotazione. Aggiungi la prima qui sopra.', 'Ainda sem marcações. Adicione a primeira acima.'],
+ bk_nomatch: ['No bookings with this status.', 'No hay citas con este estado.', 'Aucune réservation avec ce statut.', 'Keine Buchungen mit diesem Status.', 'Nessuna prenotazione con questo stato.', 'Sem marcações com este estado.'],
+ cancel: ['Cancel', 'Cancelar', 'Annuler', 'Stornieren', 'Annulla', 'Cancelar'],
+ delete: ['Delete', 'Eliminar', 'Supprimer', 'Löschen', 'Elimina', 'Eliminar'],
+ del_aria: ['Delete booking for {n}', 'Eliminar la cita de {n}', 'Supprimer la réservation de {n}', 'Buchung von {n} löschen', 'Elimina la prenotazione di {n}', 'Eliminar a marcação de {n}'],
+ del_conf: ['Delete this booking? This cannot be undone.', '¿Eliminar esta cita? No se puede deshacer.', 'Supprimer cette réservation ? Cette action est irréversible.', 'Diese Buchung löschen? Das lässt sich nicht rückgängig machen.', 'Eliminare questa prenotazione? L’azione non è reversibile.', 'Eliminar esta marcação? Não pode ser anulado.'],
+ no_orders: ['No orders yet.', 'Aún no hay pedidos.', 'Aucune commande.', 'Noch keine Bestellungen.', 'Nessun ordine.', 'Ainda sem encomendas.'],
+ os_pending: ['Awaiting confirmation', 'Pendiente de confirmación', 'En attente de confirmation', 'Warten auf Bestätigung', 'In attesa di conferma', 'A aguardar confirmação'],
+ os_paid: ['Paid', 'Pagado', 'Payée', 'Bezahlt', 'Pagato', 'Pago'],
+ os_failed: ['Payment failed', 'Pago fallido', 'Paiement échoué', 'Zahlung fehlgeschlagen', 'Pagamento non riuscito', 'Pagamento falhado'],
+ os_expired: ['Expired', 'Caducado', 'Expirée', 'Abgelaufen', 'Scaduto', 'Expirado'],
+ acct_as: ['Signed in as', 'Sesión iniciada como', 'Connecté en tant que', 'Angemeldet als', 'Accesso eseguito come', 'Sessão iniciada como'],
+ au_create: ['Create account', 'Crear cuenta', 'Créer un compte', 'Konto erstellen', 'Crea account', 'Criar conta'],
+ au_email: ['Email', 'Email', 'E-mail', 'E-Mail', 'Email', 'Email'],
+ au_pass: ['Password', 'Contraseña', 'Mot de passe', 'Passwort', 'Password', 'Palavra-passe'],
+ au_pass2: ['Repeat password', 'Repite la contraseña', 'Répétez le mot de passe', 'Passwort wiederholen', 'Ripeti la password', 'Repita a palavra-passe'],
+ au_in_busy: ['Signing in…', 'Iniciando sesión…', 'Connexion…', 'Anmeldung läuft…', 'Accesso in corso…', 'A iniciar sessão…'],
+ au_up_busy: ['Creating account…', 'Creando cuenta…', 'Création du compte…', 'Konto wird erstellt…', 'Creazione account…', 'A criar conta…'],
+ close: ['Close', 'Cerrar', 'Fermer', 'Schließen', 'Chiudi', 'Fechar'],
+ mode_l: ['Mode', 'Modo', 'Mode', 'Modus', 'Modalità', 'Modo'],
+ pw_show: ['Show password', 'Mostrar contraseña', 'Afficher le mot de passe', 'Passwort anzeigen', 'Mostra password', 'Mostrar palavra-passe'],
+ pw_hide: ['Hide password', 'Ocultar contraseña', 'Masquer le mot de passe', 'Passwort verbergen', 'Nascondi password', 'Ocultar palavra-passe'],
+ e_email: ['Enter a valid email address.', 'Introduce un email válido.', 'Saisissez une adresse e-mail valide.', 'Geben Sie eine gültige E-Mail-Adresse ein.', 'Inserisci un indirizzo email valido.', 'Introduza um email válido.'],
+ e_pw_up: ['Use a password of at least 10 characters.', 'Usa una contraseña de al menos 10 caracteres.', 'Utilisez un mot de passe d’au moins 10 caractères.', 'Verwenden Sie ein Passwort mit mindestens 10 Zeichen.', 'Usa una password di almeno 10 caratteri.', 'Use uma palavra-passe com pelo menos 10 caracteres.'],
+ e_pw_in: ['Enter your password.', 'Introduce tu contraseña.', 'Saisissez votre mot de passe.', 'Geben Sie Ihr Passwort ein.', 'Inserisci la password.', 'Introduza a palavra-passe.'],
+ e_match: ['The passwords do not match.', 'Las contraseñas no coinciden.', 'Les mots de passe ne correspondent pas.', 'Die Passwörter stimmen nicht überein.', 'Le password non coincidono.', 'As palavras-passe não coincidem.'],
+ e_cred: ['Email or password is incorrect.', 'Email o contraseña incorrectos.', 'E-mail ou mot de passe incorrect.', 'E-Mail oder Passwort ist falsch.', 'Email o password errata.', 'Email ou palavra-passe incorretos.'],
+ e_up: ['Could not create the account. Check the details and try again.', 'No se pudo crear la cuenta. Revisa los datos e inténtalo de nuevo.', 'Impossible de créer le compte. Vérifiez les informations et réessayez.', 'Konto konnte nicht erstellt werden. Prüfen Sie die Angaben und versuchen Sie es erneut.', 'Impossibile creare l’account. Controlla i dati e riprova.', 'Não foi possível criar a conta. Verifique os dados e tente novamente.'],
+ e_in: ['Could not sign in. Try again.', 'No se pudo iniciar sesión. Inténtalo de nuevo.', 'Connexion impossible. Réessayez.', 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.', 'Impossibile accedere. Riprova.', 'Não foi possível iniciar sessão. Tente novamente.'],
+ i_conf: ['Account created. Check your email to confirm it, then sign in.', 'Cuenta creada. Revisa tu email para confirmarla y luego inicia sesión.', 'Compte créé. Vérifiez vos e-mails pour le confirmer, puis connectez-vous.', 'Konto erstellt. Bestätigen Sie es per E-Mail und melden Sie sich dann an.', 'Account creato. Controlla l’email per confermarlo, poi accedi.', 'Conta criada. Confirme-a no seu email e depois inicie sessão.'],
+ t_in: ['Signed in.', 'Sesión iniciada.', 'Connexion réussie.', 'Angemeldet.', 'Accesso eseguito.', 'Sessão iniciada.'],
+ t_up: ['Account created. Welcome to BookFlow.', 'Cuenta creada. Te damos la bienvenida a BookFlow.', 'Compte créé. Bienvenue sur BookFlow.', 'Konto erstellt. Willkommen bei BookFlow.', 'Account creato. Benvenuto in BookFlow.', 'Conta criada. Bem-vindo ao BookFlow.'],
+ t_out: ['You have been signed out.', 'Has cerrado sesión.', 'Vous êtes déconnecté.', 'Sie wurden abgemeldet.', 'Sei uscito dall’account.', 'Terminou a sessão.'],
+ t_outf: ['Could not sign out.', 'No se pudo cerrar sesión.', 'Déconnexion impossible.', 'Abmeldung fehlgeschlagen.', 'Impossibile uscire.', 'Não foi possível terminar a sessão.'],
+ e_name: ['Enter the client name.', 'Introduce el nombre del cliente.', 'Saisissez le nom du client.', 'Geben Sie den Namen des Kunden ein.', 'Inserisci il nome del cliente.', 'Introduza o nome do cliente.'],
+ e_cmail: ['The client email is not valid.', 'El email del cliente no es válido.', 'L’e-mail du client n’est pas valide.', 'Die E-Mail des Kunden ist ungültig.', 'L’email del cliente non è valida.', 'O email do cliente não é válido.'],
+ e_svc: ['Enter the service.', 'Introduce el servicio.', 'Saisissez le service.', 'Geben Sie die Leistung ein.', 'Inserisci il servizio.', 'Introduza o serviço.'],
+ e_date: ['Choose a valid date.', 'Elige una fecha válida.', 'Choisissez une date valide.', 'Wählen Sie ein gültiges Datum.', 'Scegli una data valida.', 'Escolha uma data válida.'],
+ e_amt: ['Enter an amount greater than 0, e.g. 25.00.', 'Introduce un importe mayor que 0, p. ej. 25,00.', 'Saisissez un montant supérieur à 0, p. ex. 25,00.', 'Geben Sie einen Betrag über 0 ein, z. B. 25,00.', 'Inserisci un importo maggiore di 0, es. 25,00.', 'Introduza um montante superior a 0, p. ex. 25,00.'],
+ t_add: ['Booking added.', 'Cita añadida.', 'Réservation ajoutée.', 'Buchung hinzugefügt.', 'Prenotazione aggiunta.', 'Marcação adicionada.'],
+ t_cancel: ['Booking cancelled.', 'Cita cancelada.', 'Réservation annulée.', 'Buchung storniert.', 'Prenotazione annullata.', 'Marcação cancelada.'],
+ t_del: ['Booking deleted.', 'Cita eliminada.', 'Réservation supprimée.', 'Buchung gelöscht.', 'Prenotazione eliminata.', 'Marcação eliminada.'],
+ e_net: ['Cannot reach the server. Check your connection and try again.', 'No se puede contactar con el servidor. Revisa tu conexión e inténtalo de nuevo.', 'Serveur injoignable. Vérifiez votre connexion et réessayez.', 'Server nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.', 'Server non raggiungibile. Controlla la connessione e riprova.', 'Não foi possível contactar o servidor. Verifique a ligação e tente novamente.'],
+ e_gen: ['Something went wrong. Please try again.', 'Algo salió mal. Inténtalo de nuevo.', 'Un problème est survenu. Veuillez réessayer.', 'Etwas ist schiefgelaufen. Bitte erneut versuchen.', 'Qualcosa è andato storto. Riprova.', 'Algo correu mal. Tente novamente.'],
+ e_part: ['Some data could not be loaded.', 'No se pudieron cargar algunos datos.', 'Certaines données n’ont pas pu être chargées.', 'Einige Daten konnten nicht geladen werden.', 'Alcuni dati non sono stati caricati.', 'Alguns dados não puderam ser carregados.'],
+ e_sess: ['Could not check your session.', 'No se pudo comprobar tu sesión.', 'Impossible de vérifier votre session.', 'Sitzung konnte nicht geprüft werden.', 'Impossibile verificare la sessione.', 'Não foi possível verificar a sessão.'],
+ c_exp: ['Your session expired. Please sign in again.', 'Tu sesión ha caducado. Inicia sesión de nuevo.', 'Votre session a expiré. Reconnectez-vous.', 'Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.', 'La sessione è scaduta. Accedi di nuovo.', 'A sua sessão expirou. Inicie sessão novamente.'],
+ c_429: ['Too many open checkouts. Wait a few minutes.', 'Demasiados pagos abiertos. Espera unos minutos.', 'Trop de paiements ouverts. Patientez quelques minutes.', 'Zu viele offene Checkouts. Warten Sie einige Minuten.', 'Troppi pagamenti aperti. Attendi qualche minuto.', 'Demasiados pagamentos abertos. Aguarde alguns minutos.'],
+ c_401: ['Please sign in again.', 'Inicia sesión de nuevo.', 'Veuillez vous reconnecter.', 'Bitte melden Sie sich erneut an.', 'Accedi di nuovo.', 'Inicie sessão novamente.'],
+ c_fail: ['Could not start checkout. Try again.', 'No se pudo iniciar el pago. Inténtalo de nuevo.', 'Impossible de lancer le paiement. Réessayez.', 'Checkout konnte nicht gestartet werden. Bitte erneut versuchen.', 'Impossibile avviare il pagamento. Riprova.', 'Não foi possível iniciar o pagamento. Tente novamente.'],
+ c_bad: ['The checkout address was invalid.', 'La dirección de pago no es válida.', 'L’adresse de paiement est invalide.', 'Die Checkout-Adresse war ungültig.', 'L’indirizzo di pagamento non è valido.', 'O endereço de pagamento é inválido.'],
+ c_block: ['Blocked an unexpected checkout address.', 'Se bloqueó una dirección de pago inesperada.', 'Adresse de paiement inattendue bloquée.', 'Unerwartete Checkout-Adresse blockiert.', 'Indirizzo di pagamento imprevisto bloccato.', 'Foi bloqueado um endereço de pagamento inesperado.'],
+ c_canc: ['Checkout cancelled. Nothing was charged.', 'Pago cancelado. No se ha cobrado nada.', 'Paiement annulé. Rien n’a été débité.', 'Checkout abgebrochen. Es wurde nichts abgebucht.', 'Pagamento annullato. Non è stato addebitato nulla.', 'Pagamento cancelado. Nada foi cobrado.'],
+ c_chk: ['Checking your payment…', 'Comprobando tu pago…', 'Vérification du paiement…', 'Zahlung wird geprüft…', 'Verifica del pagamento…', 'A verificar o pagamento…'],
+ c_ok: ['Payment confirmed.', 'Pago confirmado.', 'Paiement confirmé.', 'Zahlung bestätigt.', 'Pagamento confermato.', 'Pagamento confirmado.'],
+ c_nopay: ['The payment did not complete. Nothing was charged.', 'El pago no se completó. No se ha cobrado nada.', 'Le paiement n’a pas abouti. Rien n’a été débité.', 'Die Zahlung wurde nicht abgeschlossen. Es wurde nichts abgebucht.', 'Il pagamento non è stato completato. Non è stato addebitato nulla.', 'O pagamento não foi concluído. Nada foi cobrado.'],
+ c_wait: ['Still waiting for Stripe to confirm. The order will update under Orders.', 'Aún esperando la confirmación de Stripe. El pedido se actualizará en Pedidos.', 'En attente de la confirmation de Stripe. La commande sera mise à jour dans Commandes.', 'Warten noch auf die Bestätigung von Stripe. Die Bestellung wird unter Bestellungen aktualisiert.', 'In attesa della conferma di Stripe. L’ordine si aggiornerà in Ordini.', 'Ainda a aguardar a confirmação da Stripe. A encomenda será atualizada em Encomendas.']
+};
+let L = 'en', LI = 0;
+const money = (c) => new Intl.NumberFormat(LOC[L], { style: 'currency', currency: 'EUR' }).format(c / 100);
+const t = (k, v) => {
+  const a = D[k]; let s = a ? (a[LI] ?? a[0]) : k;
+  s = s.replaceAll('{p}', money(3999));
+  if (v) for (const x in v) s = s.replaceAll('{' + x + '}', v[x]);
+  return s;
+};
+
+/* ---------- helpers ---------- */
+const $ = (id) => document.getElementById(id);
+const h = (tag, cls, ...kids) => { const e = document.createElement(tag); if (cls) e.className = cls; for (const k of kids.flat()) e.append(k instanceof Node ? k : String(k ?? '')); return e; };
+const clean = (v, n = 80) => String(v ?? '').normalize('NFKC').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\s+/g, ' ').trim().slice(0, n);
+const emailOk = (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
+const say = (id, msg) => { const e = $(id); e.textContent = msg || ''; e.hidden = !msg; return !msg; };
+const netMsg = (e) => /failed to fetch|network|load failed/i.test(e?.message || '') ? t('e_net') : t('e_gen');
+function toast(msg, bad) {
+  const x = h('button', 'ml-3 underline', t('close')); const m = h('div', 'glass px-4 py-3 text-sm ' + (bad ? 'no' : 'ok'), msg);
+  m.setAttribute('role', bad ? 'alert' : 'status'); x.onclick = () => m.remove(); m.append(x);
+  $('toasts').append(m); setTimeout(() => m.remove(), bad ? 7000 : 4000);
+}
+async function busy(btn, label, fn) {
+  if (btn.disabled) return;
+  const html = btn.innerHTML; btn.disabled = true; btn.replaceChildren(h('span', 'spin'), label);
+  try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = html; }
+}
+
+/* ---------- static sections built once, translated by data-i18n ---------- */
+$('featGrid').replaceChildren(...ICONS.map((ic, i) => { const c = h('div', 'glass p-6'); c.innerHTML = `<span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ic}</svg></span><h3 class="font-semibold mb-1" data-i18n="f${i + 1}t"></h3><p class="mute text-sm" data-i18n="f${i + 1}d"></p>`; return c; }));
+$('prList').replaceChildren(...[1, 2, 3, 4].map((n) => { const li = h('li', 'flex gap-2'); li.innerHTML = `<span class="ok" aria-hidden="true">✓</span><span data-i18n="f${n}t"></span>`; return li; }));
+$('revGrid').replaceChildren(...[['Elena Marchetti', 'EM'], ['Julien Moreau', 'JM'], ['Katrin Vogel', 'KV']].map(([nm, ini], i) => { const c = h('figure', 'glass p-6 flex flex-col gap-4 m-0'); c.innerHTML = `<div class="ok" aria-hidden="true">★★★★★</div><blockquote class="m-0 flex-1" data-i18n="r${i + 1}q"></blockquote><figcaption class="flex items-center gap-3"><span aria-hidden="true" class="grid place-items-center w-11 h-11 rounded-full font-bold text-sm" style="background:linear-gradient(135deg,#34D399,#22D3EE);color:#052E22">${ini}</span><span><b class="block text-sm">${nm}</b><span class="mute text-xs" data-i18n="r${i + 1}r"></span></span></figcaption>`; return c; }));
+$('faqList').replaceChildren(...[1, 2, 3, 4, 5].map((n) => { const d = h('details', 'glass faq'); d.innerHTML = `<summary data-i18n="q${n}"></summary><p data-i18n="a${n}"></p>`; return d; }));
+let cmp = 1;
+function cmpTabs() {
+  $('cmpTabs').replaceChildren(...[1, 2, 3].map((n) => { const b = h('button', 'btn ' + (cmp === n ? 'btn-p' : 'btn-g'), t('c_t' + n)); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', cmp === n); b.onclick = () => { cmp = n; $('cB').dataset.i18n = 'c_b' + n; $('cA').dataset.i18n = 'c_a' + n; cmpTabs(); applyI18n(true); }; return b; }));
+}
+
+/* ---------- state ---------- */
+// phases: initializing, public, authenticated, loading-dashboard, signing-out, configuration-error ("authenticating" is the busy form state)
+const S = { phase: 'initializing', user: null, bookings: [], orders: [], tab: 'overview', filter: 'all', err: '', op: 0, co: false, mode: 'login' };
+let sb = null;
+const PRIV = ['authenticated', 'loading-dashboard', 'signing-out'];
+function setPhase(p) { S.phase = p; render(); }
+
+function applyI18n(skipTabs) {
+  document.documentElement.lang = L; document.title = t('title');
+  document.querySelectorAll('[data-i18n]').forEach((e) => { e.textContent = t(e.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-aria]').forEach((e) => e.setAttribute('aria-label', t(e.dataset.i18nAria)));
+  document.querySelectorAll('[data-m]').forEach((e) => { e.textContent = money(+e.dataset.m); });
+  document.querySelectorAll('.lang-sel').forEach((s) => { s.value = L; });
+  $('aEye').setAttribute('aria-label', t($('aPass').type === 'password' ? 'pw_show' : 'pw_hide'));
+  if (!skipTabs) cmpTabs();
+  authLabels();
+}
+function setLang(l) {
+  const i = LANGS.findIndex((x) => x[0] === l); if (i < 0) return;
+  L = l; LI = i; try { localStorage.setItem('bf_lang', l); } catch {}
+  applyI18n(); render();
+}
+document.querySelectorAll('.lang-sel').forEach((s) => { s.replaceChildren(...LANGS.map(([c, n]) => { const o = h('option', '', n); o.value = c; return o; })); s.onchange = () => setLang(s.value); });
+document.querySelectorAll('.theme-btn').forEach((b) => { b.onclick = () => { const n = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; document.documentElement.dataset.theme = n; try { localStorage.setItem('bf_theme', n); } catch {} }; });
+
+function render() {            // the only place that toggles top-level visibility
+  const p = S.phase, priv = PRIV.includes(p);
+  $('boot').hidden = p !== 'initializing'; $('pub').hidden = priv || p === 'initializing'; $('app').hidden = !priv;
+  $('cfgErr').hidden = p !== 'configuration-error';
+  document.querySelectorAll('.need').forEach((b) => { b.disabled = !sb; });
+  if (priv) renderApp();
+}
+function renderApp() {
+  const loading = S.phase === 'loading-dashboard';
+  $('who').textContent = S.user?.email ?? ''; $('acctMail').textContent = S.user?.email ?? '';
+  $('dashLoad').hidden = !loading; $('dashBody').hidden = loading; say('dashErr', S.err);
+  $('outBtn').disabled = S.phase === 'signing-out';
+  $('tabs').replaceChildren(...TABS.map((k) => { const b = h('button', 'btn ' + (S.tab === k ? 'btn-p' : 'btn-g'), t(TAB_KEY[k])); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', S.tab === k); b.onclick = () => { S.tab = k; renderApp(); }; return b; }));
+  TABS.forEach((k) => { $('p-' + k).hidden = S.tab !== k; });
+  if (loading) return;
+  const n = (st) => S.bookings.filter((b) => b.status === st).length;
+  const card = (l, v) => h('div', 'glass p-4', h('div', 'mute text-sm', l), h('div', 'text-2xl font-bold', v));
+  $('stats').replaceChildren(card(t('k_book'), S.bookings.length), card(t('st_pending'), n('pending')), card(t('st_cancelled'), n('cancelled')));
+  const today = new Date().toISOString().slice(0, 10);
+  const up = S.bookings.filter((b) => b.status !== 'cancelled' && b.booking_date >= today).slice(0, 5);
+  $('upcoming').replaceChildren(...(up.length ? up.map((b) => row(b)) : [empty(t('up_none'))]));
+  $('filters').replaceChildren(...['all', 'pending', 'paid', 'cancelled'].map((f) => { const b = h('button', 'btn ' + (S.filter === f ? 'btn-p' : 'btn-g'), f === 'all' ? t('fl_all') : t('st_' + f)); b.setAttribute('aria-pressed', S.filter === f); b.onclick = () => { S.filter = f; renderApp(); }; return b; }));
+  const rows = S.bookings.filter((b) => S.filter === 'all' || b.status === S.filter);
+  $('list').replaceChildren(...(rows.length ? rows.map((b) => row(b, true)) : [empty(S.bookings.length ? t('bk_nomatch') : t('bk_empty'))]));
+  $('orders').replaceChildren(...(S.orders.length ? S.orders.map((o) => { const [k, c] = ORDER[o.status] ?? ORDER.expired; return h('div', 'glass p-3 flex flex-wrap justify-between gap-2 text-sm', `${o.quantity} × BookFlow Pro · ${money(o.amount_cents)} · ${String(o.created_at).slice(0, 10)}`, h('span', 'badge ' + c, t(k))); }) : [empty(t('no_orders'))]));
+}
+const empty = (m) => h('div', 'glass p-6 text-center mute text-sm', m);
+function row(b, actions) {
+  const c = { pending: 'wn', paid: 'ok', cancelled: 'mute' }[b.status] ?? 'mute';
+  const r = h('article', 'glass p-4 flex flex-wrap items-center justify-between gap-3',
+    h('div', 'min-w-0', h('div', 'font-semibold truncate', `${b.client_name} · ${b.service}`), h('div', 'text-sm mute', b.booking_date + (b.client_email ? ' · ' + b.client_email : ''))),
+    h('div', 'flex items-center gap-2', h('span', 'font-semibold', money(b.amount_cents)), h('span', 'badge ' + c, D['st_' + b.status] ? t('st_' + b.status) : b.status)));
+  if (actions) {
+    const box = r.lastChild;
+    if (b.status === 'pending') { const x = h('button', 'btn btn-g', t('cancel')); x.onclick = () => busy(x, '…', () => patch(b)); box.append(x); }
+    const d = h('button', 'btn btn-g no', t('delete')); d.setAttribute('aria-label', t('del_aria', { n: b.client_name }));
+    d.onclick = () => { if (confirm(t('del_conf'))) busy(d, '…', () => del(b)); }; box.append(d);
+  }
+  return r;
+}
+
+/* ---------- data (RLS decides what comes back) ---------- */
+async function loadDash(user) {
+  const op = ++S.op;
+  const [b, o] = await Promise.all([
+    sb.from('bookings').select(COLS).order('booking_date', { ascending: true }).order('created_at'),
+    sb.from('orders').select('id, quantity, amount_cents, status, created_at').order('created_at', { ascending: false }).limit(20)
+  ]).catch((e) => [{ error: e }, { error: e }]);
+  if (op !== S.op || S.user?.id !== user.id) return;      // stale: signed out or switched account meanwhile
+  S.err = b.error || o.error ? t('e_part') + ' ' + netMsg(b.error || o.error) : '';
+  S.bookings = b.data ?? []; S.orders = o.data ?? [];
+  setPhase('authenticated');
+}
+async function patch(b) {
+  const { data, error } = await sb.from('bookings').update({ status: 'cancelled' }).eq('id', b.id).select(COLS).single();
+  if (error) return toast(netMsg(error), true);
+  S.bookings = S.bookings.map((x) => (x.id === b.id ? data : x)); renderApp(); toast(t('t_cancel'));
+}
+async function del(b) {
+  const { error } = await sb.from('bookings').delete().eq('id', b.id);
+  if (error) return toast(netMsg(error), true);
+  S.bookings = S.bookings.filter((x) => x.id !== b.id); renderApp(); toast(t('t_del'));
+}
+$('bkForm').onsubmit = (e) => {
+  e.preventDefault();
+  const name = clean($('bName').value), email = clean($('bEmail').value, 254).toLowerCase(), svc = clean($('bSvc').value), date = $('bDate').value, amt = Number($('bAmt').value.replace(',', '.'));
+  if (!name) return say('bkErr', t('e_name'));
+  if (email && !emailOk(email)) return say('bkErr', t('e_cmail'));
+  if (!svc) return say('bkErr', t('e_svc'));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) return say('bkErr', t('e_date'));
+  if (!Number.isFinite(amt) || amt <= 0 || amt > 100000) return say('bkErr', t('e_amt'));
+  say('bkErr', ''); const uid = S.user?.id;
+  busy($('bkBtn'), t('bk_busy'), async () => {
+    const { data, error } = await sb.from('bookings').insert({ client_name: name, client_email: email || null, service: svc, booking_date: date, amount_cents: Math.round(amt * 100) }).select(COLS).single();
+    if (error) return say('bkErr', netMsg(error));
+    if (S.user?.id !== uid) return;
+    S.bookings.push(data); S.bookings.sort((a, b) => a.booking_date.localeCompare(b.booking_date)); renderApp(); $('bkForm').reset(); toast(t('t_add'));
+  }).then(() => { $('bkBtn').textContent = t('bk_add'); });
+};
+
+/* ---------- auth ---------- */
+function sync(session) {        // single entry point for every auth event; deduped by user id
+  const u = session?.user ?? null;
+  if (u && S.user?.id === u.id) { S.user = u; return; }       // token refresh / duplicate INITIAL_SESSION
+  S.op++; S.bookings = []; S.orders = []; S.err = ''; S.tab = 'overview'; S.filter = 'all'; S.user = u;
+  if (u) { $('authDlg').open && $('authDlg').close(); setPhase('loading-dashboard'); loadDash(u); } else setPhase('public');
+}
+function authLabels() {
+  const up = S.mode === 'signup';
+  $('adT').textContent = t(up ? 'au_create' : 'signin');
+  if (!$('aBtn').disabled) $('aBtn').textContent = t(up ? 'au_create' : 'signin');
+}
+function authMode(m) {
+  S.mode = m; const up = m === 'signup'; authLabels();
+  $('mIn').className = 'btn flex-1 ' + (up ? '' : 'btn-p'); $('mUp').className = 'btn flex-1 ' + (up ? 'btn-p' : '');
+  $('aP2w').hidden = !up; $('aPass').autocomplete = up ? 'new-password' : 'current-password'; say('aErr', ''); say('aInfo', '');
+}
+function openAuth(m) { if (!sb) return; authMode(m); if (!$('authDlg').open) $('authDlg').showModal(); $('aMail').focus(); }
+$('mIn').onclick = () => authMode('login'); $('mUp').onclick = () => authMode('signup'); $('adX').onclick = () => $('authDlg').close();
+$('aEye').onclick = () => { const on = $('aPass').type === 'password'; $('aPass').type = on ? 'text' : 'password'; $('aEye').setAttribute('aria-pressed', on); $('aEye').setAttribute('aria-label', t(on ? 'pw_hide' : 'pw_show')); };
+$('authForm').onsubmit = (e) => {
+  e.preventDefault(); const up = S.mode === 'signup';
+  const email = clean($('aMail').value, 254).toLowerCase(), pass = $('aPass').value;
+  say('aInfo', '');
+  if (!emailOk(email)) return say('aErr', t('e_email'));
+  if (pass.length < (up ? 10 : 1)) return say('aErr', t(up ? 'e_pw_up' : 'e_pw_in'));
+  if (up && pass !== $('aPass2').value) return say('aErr', t('e_match'));
+  say('aErr', '');
+  busy($('aBtn'), t(up ? 'au_up_busy' : 'au_in_busy'), async () => {
+    try {
+      if (!up) { const { error } = await sb.auth.signInWithPassword({ email, password: pass }); if (error) throw error; toast(t('t_in')); }
+      else { const { data, error } = await sb.auth.signUp({ email, password: pass }); if (error) throw error;
+        if (data.session) toast(t('t_up')); else { authMode('login'); say('aInfo', t('i_conf')); } }
+    } catch (err) { say('aErr', /invalid login|credentials/i.test(err?.message || '') ? t('e_cred') : /network|fetch/i.test(err?.message || '') ? netMsg(err) : t(up ? 'e_up' : 'e_in')); }
+  }).then(() => { authLabels(); });
+};
+$('outBtn').onclick = async () => {
+  if (S.phase === 'signing-out') return; setPhase('signing-out');
+  try { const { error } = await sb.auth.signOut(); if (error) throw error; sync(null); toast(t('t_out')); }
+  catch (e) { setPhase('authenticated'); toast(t('t_outf') + ' ' + netMsg(e), true); }
+};
+
+/* ---------- checkout (server decides price and trial; browser sends no amount) ---------- */
+function setCo(on) { S.co = on; document.querySelectorAll('[data-co]').forEach((b) => { b.disabled = on || !sb; }); }
+async function checkout() {
+  if (S.co) return;
+  if (!sb || !S.user) return openAuth('signup');
+  setCo(true);
+  try {
+    let { data: { session } } = await sb.auth.getSession();
+    if (!session?.access_token) { const r = await sb.auth.refreshSession(); session = r.data.session; }
+    if (!session?.access_token) { toast(t('c_exp'), true); return; }
+    const { data, error } = await sb.functions.invoke(CFG.fn, { body: { quantity: 1 } });   // SDK sends the session's bearer token
+    if (error) { const st = error.context?.status; return toast(st === 429 ? t('c_429') : st === 401 ? t('c_401') : t('c_fail'), true); }
+    let u; try { u = new URL(data?.url); } catch { return toast(t('c_bad'), true); }
+    if (u.protocol !== 'https:' || u.hostname !== CFG.host) return toast(t('c_block'), true);
+    location.assign(u.href); return;
+  } catch (e) { toast(t('c_fail') + ' ' + netMsg(e), true); }
+  finally { if (!document.hidden) setCo(false); }
+}
+document.querySelectorAll('[data-co]').forEach((b) => { b.onclick = checkout; });
+async function afterCheckout() {     // a returning URL is never proof of payment; only the order row (set by Stripe's webhook) is
+  const q = new URLSearchParams(location.search), kind = q.get('checkout'), id = q.get('order_id');
+  if (kind === null && !q.has('paid')) return;
+  history.replaceState(null, '', location.pathname);
+  if (!S.user || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id ?? '')) return;
+  if (kind === 'cancel') return toast(t('c_canc'));
+  const uid = S.user.id; toast(t('c_chk'));
+  for (let i = 0; i < 10; i++) {
+    const { data, error } = await sb.from('orders').select('status').eq('id', id).maybeSingle();
+    if (S.user?.id !== uid) return;
+    if (error) return toast(netMsg(error), true);
+    if (data && data.status !== 'pending') { await loadDash(S.user); return data.status === 'paid' ? toast(t('c_ok')) : toast(t('c_nopay'), true); }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  toast(t('c_wait'));
+}
+
+/* ---------- public page behavior ---------- */
+$('yr').textContent = new Date().getFullYear();
+document.addEventListener('click', (e) => { const a = e.target.closest('[data-auth]'); if (a) openAuth(a.dataset.auth); if (e.target.closest('#menu a')) $('menu').hidden = true; });
+$('menuBtn').onclick = () => { const on = $('menu').hidden; $('menu').hidden = !on; $('menuBtn').setAttribute('aria-expanded', on); };
+
+/* 3D preview: eased pointer tracking drives tilt, parallax per layer (--d), moving light (--lx/--ly) and shadow offset (--sx/--sy) */
+if (matchMedia('(hover:hover) and (pointer:fine)').matches && !matchMedia('(prefers-reduced-motion:reduce)').matches) {
+  const hero = $('hero'), stage = $('stage'), tilt = $('tilt'); let tx = 0, ty = 0, cx = 0, cy = 0, raf = 0;
+  const set = (k, v) => tilt.style.setProperty(k, v);
+  const tick = () => {
+    cx += (tx - cx) * .1; cy += (ty - cy) * .1;
+    set('--rx', (-cy * 9).toFixed(2) + 'deg'); set('--ry', (cx * 12).toFixed(2) + 'deg'); set('--px', cx.toFixed(3)); set('--py', cy.toFixed(3));
+    set('--lx', (50 + cx * 50).toFixed(1) + '%'); set('--ly', (50 + cy * 50).toFixed(1) + '%'); set('--sx', (-cx * 16).toFixed(1)); set('--sy', (-cy * 10).toFixed(1));
+    raf = Math.abs(tx - cx) > .001 || Math.abs(ty - cy) > .001 ? requestAnimationFrame(tick) : 0;
+  };
+  const go = () => { raf || (raf = requestAnimationFrame(tick)); };
+  hero.addEventListener('pointermove', (e) => { const r = stage.getBoundingClientRect(); tx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width - .5) * 2)); ty = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height - .5) * 2)); go(); });
+  hero.addEventListener('pointerleave', () => { tx = ty = 0; go(); });
+}
+
+/* ---------- init ---------- */
+function isSecret(k) { if (/^sb_secret_/i.test(k)) return true; try { return JSON.parse(atob(k.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role === 'service_role'; } catch { return false; } }
+async function init() {
+  let l = 'en'; try { l = localStorage.getItem('bf_lang') || (navigator.language || 'en').slice(0, 2).toLowerCase(); } catch {}
+  setLang(LANGS.some((x) => x[0] === l) ? l : 'en');
+  const ok = typeof supabase !== 'undefined' && /^https:\/\//.test(CFG.url) && CFG.key && !/YOUR_/.test(CFG.key) && !isSecret(CFG.key);
+  if (!ok) { render(); return setPhase('configuration-error'); }
+  sb = supabase.createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
+  sb.auth.onAuthStateChange((_ev, session) => { setTimeout(() => sync(session), 0); });   // no Supabase calls inside the callback
+  try { const { data } = await sb.auth.getSession(); sync(data.session); }
+  catch (e) { setPhase('public'); toast(t('e_sess') + ' ' + netMsg(e), true); }
+  afterCheckout();
+}
+init();
+})();
+</script>
+</body>
+</html>
