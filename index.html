@@ -258,7 +258,7 @@ dialog::backdrop{background:rgba(10,16,30,.6)}
 (() => {
 'use strict';
 /* ---------- config ---------- */
-const CFG = { url: 'https://frbihsiupbuunswyzpkt.supabase.co', key: 'sb_publishable_MyUAvujNAhCn1Jevqzk2nQ_oSBCIO4', fn: 'create-checkout', host: 'checkout.stripe.com' };
+const CFG = { url: 'https://frbihsiupbuunswyzpkt.supabase.co', key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZyYmloc2l1cGJ1dW5zd3l6cGt0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI1NjAxMjYsImV4cCI6MjEwODEzNjEyNn0.TFXkhnNu6JpQS6JDplt128JpFfi8yb_t_WdoF3_lvRw', fn: 'create-checkout', host: 'checkout.stripe.com' };
 const COLS = 'id, client_name, client_email, service, booking_date, amount_cents, status, created_at';
 const ICONS = [
  '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
@@ -421,6 +421,7 @@ const D = {
  e_net: ['Cannot reach the server. Check your connection and try again.', 'No se puede contactar con el servidor. Revisa tu conexión e inténtalo de nuevo.', 'Serveur injoignable. Vérifiez votre connexion et réessayez.', 'Server nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.', 'Server non raggiungibile. Controlla la connessione e riprova.', 'Não foi possível contactar o servidor. Verifique a ligação e tente novamente.'],
  e_gen: ['Something went wrong. Please try again.', 'Algo salió mal. Inténtalo de nuevo.', 'Un problème est survenu. Veuillez réessayer.', 'Etwas ist schiefgelaufen. Bitte erneut versuchen.', 'Qualcosa è andato storto. Riprova.', 'Algo correu mal. Tente novamente.'],
  e_part: ['Some data could not be loaded.', 'No se pudieron cargar algunos datos.', 'Certaines données n’ont pas pu être chargées.', 'Einige Daten konnten nicht geladen werden.', 'Alcuni dati non sono stati caricati.', 'Alguns dados não puderam ser carregados.'],
+ e_401: ['The server rejected the request (401). Check that the Supabase URL and public key belong to the same project, then reload.', 'El servidor rechazó la solicitud (401). Comprueba que la URL de Supabase y la clave pública son del mismo proyecto y recarga la página.', 'Le serveur a rejeté la requête (401). Vérifiez que l’URL Supabase et la clé publique appartiennent au même projet, puis rechargez la page.', 'Der Server hat die Anfrage abgelehnt (401). Prüfen Sie, ob Supabase-URL und öffentlicher Schlüssel zum selben Projekt gehören, und laden Sie die Seite neu.', 'Il server ha rifiutato la richiesta (401). Verifica che URL Supabase e chiave pubblica appartengano allo stesso progetto, poi ricarica la pagina.', 'O servidor rejeitou o pedido (401). Verifique se o URL do Supabase e a chave pública pertencem ao mesmo projeto e recarregue a página.'],
  e_unconf: ['Your email is not confirmed yet. Open the confirmation link we sent you, then sign in.', 'Tu email aún no está confirmado. Abre el enlace de confirmación que te enviamos y vuelve a iniciar sesión.', 'Votre e-mail n’est pas encore confirmé. Ouvrez le lien de confirmation reçu, puis connectez-vous.', 'Ihre E-Mail ist noch nicht bestätigt. Öffnen Sie den Bestätigungslink und melden Sie sich dann an.', 'La tua email non è ancora confermata. Apri il link di conferma ricevuto, poi accedi.', 'O seu email ainda não foi confirmado. Abra a ligação de confirmação enviada e depois inicie sessão.'],
  e_rate: ['Too many attempts. Wait a minute and try again.', 'Demasiados intentos. Espera un minuto e inténtalo de nuevo.', 'Trop de tentatives. Patientez une minute et réessayez.', 'Zu viele Versuche. Warten Sie eine Minute und versuchen Sie es erneut.', 'Troppi tentativi. Attendi un minuto e riprova.', 'Demasiadas tentativas. Aguarde um minuto e tente novamente.'],
  e_sdk: ['The sign-in library could not load. Check your connection or ad blocker and reload the page.', 'No se pudo cargar la biblioteca de acceso. Revisa tu conexión o el bloqueador de anuncios y recarga la página.', 'La bibliothèque de connexion n’a pas pu se charger. Vérifiez votre connexion ou votre bloqueur de publicités et rechargez la page.', 'Die Anmelde-Bibliothek konnte nicht geladen werden. Prüfen Sie Verbindung oder Werbeblocker und laden Sie die Seite neu.', 'La libreria di accesso non si è caricata. Controlla la connessione o il blocco pubblicità e ricarica la pagina.', 'Não foi possível carregar a biblioteca de início de sessão. Verifique a ligação ou o bloqueador de anúncios e recarregue a página.'],
@@ -639,7 +640,8 @@ $('authForm').onsubmit = (e) => {
     } catch (err) {
       const c = err?.code || '', st = err?.status, msg = err?.message || '';
       console.error('[BookFlow auth]', up ? 'signUp' : 'signIn', { code: c, status: st, name: err?.name, message: msg });   // no tokens or passwords are logged
-      say('aErr', c === 'email_not_confirmed' || /not confirmed/i.test(msg) ? t('e_unconf')
+      say('aErr', st === 401 || /invalid api key|no api key/i.test(msg) ? t('e_401')
+        : c === 'email_not_confirmed' || /not confirmed/i.test(msg) ? t('e_unconf')
         : c === 'invalid_credentials' || /invalid login|credentials/i.test(msg) ? t('e_cred')
         : st === 429 || /rate limit/i.test(c + msg) ? t('e_rate')
         : err?.name === 'AuthRetryableFetchError' || /network|fetch/i.test(msg) ? netMsg(err)
@@ -722,12 +724,13 @@ if (matchMedia('(hover:hover) and (pointer:fine)').matches && !matchMedia('(pref
 }
 
 /* ---------- init ---------- */
+function keyMismatch() { try { const p = JSON.parse(atob(CFG.key.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return !!p.ref && p.ref !== new URL(CFG.url).hostname.split('.')[0]; } catch { return false; } }   // JWT anon keys carry the project ref
 function isSecret(k) { if (/^sb_secret_/i.test(k)) return true; try { return JSON.parse(atob(k.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role === 'service_role'; } catch { return false; } }
 async function init() {
   let l = 'en'; try { l = localStorage.getItem('bf_lang') || (navigator.language || 'en').slice(0, 2).toLowerCase(); } catch {}
   setLang(LANGS.some((x) => x[0] === l) ? l : 'en');
-  const ok = typeof supabase !== 'undefined' && /^https:\/\//.test(CFG.url) && CFG.key && !/YOUR_/.test(CFG.key) && !isSecret(CFG.key);
-  if (!ok) { render(); setPhase('configuration-error'); if (typeof supabase === 'undefined') toast(t('e_sdk'), true); return; }
+  const ok = typeof supabase !== 'undefined' && /^https:\/\//.test(CFG.url) && CFG.key && !/YOUR_/.test(CFG.key) && !isSecret(CFG.key) && !keyMismatch();
+  if (!ok) { if (typeof supabase !== 'undefined' && keyMismatch()) console.error('[BookFlow config] the public key belongs to a different Supabase project than CFG.url'); render(); setPhase('configuration-error'); if (typeof supabase === 'undefined') toast(t('e_sdk'), true); return; }
   sb = supabase.createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
   sb.auth.onAuthStateChange((_ev, session) => { setTimeout(() => sync(session), 0); });   // no Supabase calls inside the callback
   try { const { data } = await sb.auth.getSession(); sync(data.session); }
@@ -738,88 +741,4 @@ init();
 })();
 </script>
 </body>
-</html>  3
-  4
-  5
-  6
-  7
-  8
-  9
- 10
- 11
- 12
- 13
- 14
- 15
- 16
- 17
- 18
- 19
- 20
- 21
- 22
- 23
- 24
- 25
- 26
- 27
- 28
- 29
- 30
- 31
- 32
- 33
- 34
- 35
- 36
- 37
- 38
- 39
- 40
- 41
- 42
- 43
- 44
- 45
- 46
- 47
- 48
- 49
- 50
- 51
- 52
- 53
- 54
- 55
- 56
- 57
- 58
- 59
- 60
- 61
- 62
- 63
-<!doctype html>
-<!--
-  BookFlow — single-file frontend. Static hosting (Cloudflare Pages / Netlify), no build step.
-  Config: edit CFG in the script (public Supabase URL + publishable key only; never a service_role/secret key).
-  Backend contract (unchanged): tables bookings, orders (RLS, own rows); Edge Function create-checkout, body {quantity:1}, returns {url}.
-  Pricing, the 14-day trial and payment status are decided server-side. For the trial to be real, create-checkout must create the
-  Stripe Checkout Session with subscription_data.trial_period_days = 14 (mode "subscription"). The texts here only announce it.
-  i18n: all UI text lives in the D table (key -> [en, es, fr, de, it, pt]). Language and theme are saved in localStorage.
-  Testimonials are sample content: replace them with real customer quotes (with permission) before launch.
-  CSP: set it as a response header (_headers), not a meta tag. Needs: script-src for cdn.tailwindcss.com, cdn.jsdelivr.net and inline script;
-  style-src 'unsafe-inline'; connect-src for the Supabase URL; img-src data:. No new hosts were added. Test it before enforcing.
--->
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="strict-origin-when-cross-origin">
-<meta name="color-scheme" content="dark light">
-<meta name="description" content="BookFlow: appointments, clients and payments in one place. 14-day free trial.">
-<title>BookFlow — appointments, clients and payments in one place</title>
-<script>try{var s=localStorage.getItem('bf_theme');document.documentElement.dataset.theme=s||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}</script>
-<script src="https://cdn.tailwindcss.com/3.4.17"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<style>
+</html>
